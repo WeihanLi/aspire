@@ -528,7 +528,7 @@ internal sealed partial class DashboardViewModelService : IDashboardViewModelSer
         {
             Task<ProcessResult> task;
             var outputStringBuilder = new StringBuilder();
-            var spec = new ProcessSpec(FileUtil.FindFullPathFromPath("docker"))
+            var spec = new ProcessSpec(ContainerUtil.ContainerExecCommandFullPath)
             {
                 Arguments = $"container inspect --format=\"{{{{json .Config.Env}}}}\" {containerId}",
                 OnOutputData = s => outputStringBuilder.Append(s),

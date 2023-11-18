@@ -7,16 +7,14 @@ internal static class FileUtil
 {
     public static string FindFullPathFromPath(string command)
     {
-        ArgumentOutOfRangeException.ThrowIfNullOrWhiteSpace(command, nameof(command));
-
         if (FileNameSuffixes.CurrentPlatform.Exe != "" && !command.EndsWith(FileNameSuffixes.CurrentPlatform.Exe))
         {
-            command = command + FileNameSuffixes.CurrentPlatform.Exe;
+            command += FileNameSuffixes.CurrentPlatform.Exe;
         }
 
         foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator))
         {
-            var fullPath = Path.Combine(directory, command + FileNameSuffixes.CurrentPlatform.Exe);
+            var fullPath = Path.Combine(directory, command);
             if (File.Exists(fullPath))
             {
                 return fullPath;
@@ -25,5 +23,4 @@ internal static class FileUtil
 
         return command;
     }
-
 }

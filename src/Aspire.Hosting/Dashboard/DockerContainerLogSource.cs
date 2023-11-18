@@ -63,8 +63,6 @@ internal sealed class DockerContainerLogSource(string containerId) : ILogSource
 
     private sealed class DockerContainerLogWatcher(string? containerId) : IAsyncDisposable
     {
-        private const string Executable = "docker";
-
         private readonly Channel<string> _outputChannel = Channel.CreateUnbounded<string>(new UnboundedChannelOptions() { SingleReader = true });
         private readonly Channel<string> _errorChannel = Channel.CreateUnbounded<string>(new UnboundedChannelOptions() { SingleReader = true });
 
@@ -83,7 +81,7 @@ internal sealed class DockerContainerLogSource(string containerId) : ILogSource
             {
                 var args = $"logs --follow -t {containerId}";
 
-                var spec = new ProcessSpec(FileUtil.FindFullPathFromPath(Executable))
+                var spec = new ProcessSpec(ContainerUtil.ContainerExecCommandFullPath)
                 {
                     Arguments = args,
                     OnOutputData = WriteToOutputChannel,

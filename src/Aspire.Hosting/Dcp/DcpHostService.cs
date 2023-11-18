@@ -73,7 +73,7 @@ internal sealed class DcpHostService : IHostedLifecycleService, IAsyncDisposable
             return;
         }
 
-        EnsureDockerIfNecessary();
+        EnsureContainerIfNecessary();
         EnsureDcpHostRunning();
         await _appExecutor.RunApplicationAsync(cancellationToken).ConfigureAwait(false);
 
@@ -196,7 +196,7 @@ internal sealed class DcpHostService : IHostedLifecycleService, IAsyncDisposable
     // While in this mode, the commands we use for the docker check take quite some time
     private const int WaitTimeForDockerTestCommandInSeconds = 25;
 
-    private void EnsureDockerIfNecessary()
+    private void EnsureContainerIfNecessary()
     {
         // If we don't have any respirces that need a container  then we
         // don't need to check for Docker.
@@ -209,15 +209,15 @@ internal sealed class DcpHostService : IHostedLifecycleService, IAsyncDisposable
 
         try
         {
-            var dockerCommandArgs = "ps --latest --quiet";
-            var dockerStartInfo = new ProcessStartInfo()
+            var containerCommandArgs = "ps --quiet";
+            var containerStartInfo = new ProcessStartInfo()
             {
-                FileName = FileUtil.FindFullPathFromPath("docker"),
-                Arguments = dockerCommandArgs,
+                FileName = ContainerUtil.ContainerExecCommandFullPath,
+                Arguments = containerCommandArgs,
                 UseShellExecute = true,
                 WindowStyle = ProcessWindowStyle.Hidden
             };
-            var process = System.Diagnostics.Process.Start(dockerStartInfo);
+            var process = System.Diagnostics.Process.Start(containerStartInfo);
             if (process is { } && process.WaitForExit(TimeSpan.FromSeconds(WaitTimeForDockerTestCommandInSeconds)))
             {
                 if (process.ExitCode != 0)
@@ -225,7 +225,7 @@ internal sealed class DcpHostService : IHostedLifecycleService, IAsyncDisposable
                     Console.Error.WriteLine(string.Format(
                         CultureInfo.InvariantCulture,
                         Resources.DockerUnhealthyExceptionMessage,
-                        $"docker {dockerCommandArgs}",
+                        $"{ContainerUtil.ContainerExecCommandName} {containerCommandArgs}",
                         process.ExitCode
                     ));
                     Environment.Exit((int)DockerHealthCheckFailures.Unhealthy);
@@ -236,7 +236,7 @@ internal sealed class DcpHostService : IHostedLifecycleService, IAsyncDisposable
                 Console.Error.WriteLine(string.Format(
                     CultureInfo.InvariantCulture,
                     Resources.DockerUnresponsiveExceptionMessage,
-                    $"docker {dockerCommandArgs}",
+                    $"{ContainerUtil.ContainerExecCommandName} {containerCommandArgs}",
                     WaitTimeForDockerTestCommandInSeconds
                 ));
                 Environment.Exit((int)DockerHealthCheckFailures.Unresponsive);
