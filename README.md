@@ -8,6 +8,8 @@
 
 Customized container image: https://hub.docker.com/r/weihanli/aspire-dashboard
 
+Github Action: https://github.com/WeihanLi/aspire/actions/workflows/container-image.yml
+
 ## What is .NET Aspire?
 
 .NET Aspire is an opinionated, cloud ready stack for building observable, production ready, distributed applications. .NET Aspire is delivered through a collection of NuGet packages that handle specific cloud-native concerns. Cloud-native apps often consist of small, interconnected pieces or microservices rather than a single, monolithic code base. Cloud-native apps generally consume a large number of services, such as databases, messaging, and caching.
