@@ -35,12 +35,13 @@ jobs:
           echo ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }} | docker login -u ${{ env.DOCKER_HUB_USERNAME }} --password-stdin
 
       - name: Setup
-        run: bash ./build.sh
+        run: dotnet build ./src/Aspire.Dashboard/Aspire.Dashboard.csproj
 
       - name: Build
         run: |
-          ./dotnet.sh publish -p ContainerRepository=${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-x64 --os linux --arch x64 /t:PublishContainer
-          ./dotnet.sh publish -p ContainerRepository=${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-arm64 --os linux --arch arm64 /t:PublishContainer
+          cd ./src/Aspire.Dashboard/
+          dotnet publish -p ContainerRepository=${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-x64 --os linux --arch x64 /t:PublishContainer
+          dotnet publish -p ContainerRepository=${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-arm64 --os linux --arch arm64 /t:PublishContainer
 
       - name: Push
         run: |
