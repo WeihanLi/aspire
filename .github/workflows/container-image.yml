@@ -26,22 +26,22 @@ jobs:
       - name: Build
         run: |
           export CI=false && ./dotnet.sh build ./src/Aspire.Dashboard/Aspire.Dashboard.csproj
-          export CI=false && ./dotnet.sh publish ./src/Aspire.Dashboard/Aspire.Dashboard.csproj -p ContainerRepository=${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-x64 --os linux --arch x64 /t:PublishContainer
-          export CI=false && ./dotnet.sh publish ./src/Aspire.Dashboard/Aspire.Dashboard.csproj -p ContainerRepository=${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-arm64 --os linux --arch arm64 /t:PublishContainer
+          export CI=false && ./dotnet.sh publish ./src/Aspire.Dashboard/Aspire.Dashboard.csproj -p ContainerRepository=${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:linux-x64 --os linux --arch x64 /t:PublishContainer
+          export CI=false && ./dotnet.sh publish ./src/Aspire.Dashboard/Aspire.Dashboard.csproj -p ContainerRepository=${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:linux-arm64 --os linux --arch arm64 /t:PublishContainer
 
       - name: Login to Docker Hub
         run: |
           echo ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }} | docker login -u ${{ env.DOCKER_HUB_USERNAME }} --password-stdin
 
-      - name: Push Platform Specific Tag
+      - name: Push Platform Specific Tags
         run: |
           docker images | grep aspire-dashboard
-          docker push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-x64 
-          docker push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-arm64
+          docker push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:linux-x64 
+          docker push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:linux-arm64
 
       - name: Push Latest Tag
         run: |
           docker manifest create --amend ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:latest \
-            ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-x64 \
-            ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-arm64
+            ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:linux-x64 \
+            ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:linux-arm64
           docker manifest push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:latest
