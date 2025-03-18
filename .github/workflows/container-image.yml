@@ -25,10 +25,9 @@ jobs:
 
       - name: Build
         run: |
-          cd ./src/Aspire.Dashboard/
           ./dotnet.sh build ./src/Aspire.Dashboard/Aspire.Dashboard.csproj
-          ./dotnet.sh publish -p ContainerRepository=${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-x64 --os linux --arch x64 /t:PublishContainer
-          ./dotnet.sh publish -p ContainerRepository=${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-arm64 --os linux --arch arm64 /t:PublishContainer
+          ./dotnet.sh publish ./src/Aspire.Dashboard/Aspire.Dashboard.csproj -p ContainerRepository=${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-x64 --os linux --arch x64 /t:PublishContainer
+          ./dotnet.sh publish ./src/Aspire.Dashboard/Aspire.Dashboard.csproj -p ContainerRepository=${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-arm64 --os linux --arch arm64 /t:PublishContainer
 
       - name: Login to Docker Hub
         run: |
