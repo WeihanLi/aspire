@@ -33,8 +33,15 @@ jobs:
         run: |
           echo ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }} | docker login -u ${{ env.DOCKER_HUB_USERNAME }} --password-stdin
 
-      - name: Push
+      - name: Push Platform Specific Tag
         run: |
           docker images | grep aspire-dashboard
           docker push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-x64 
           docker push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-arm64
+
+      - name: Push Latest Tag
+        run: |
+          docker manifest create --amend ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:latest \
+            ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-x64 \
+            ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-arm64
+          docker manifest push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:latest
