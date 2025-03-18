@@ -35,4 +35,6 @@ jobs:
 
       - name: Push
         run: |
-          docker push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-x64 ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-arm64
+          docker images | grep aspire-dashboard
+          docker push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-x64 
+          docker push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard-linux-arm64
