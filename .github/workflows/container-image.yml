@@ -32,8 +32,7 @@ jobs:
       - name: Push Platform Specific Tags
         run: |
           docker images | grep aspire-dashboard
-          docker push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:latest-linux-x64 
-          docker push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:latest-linux-arm64
+          docker push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard -a
 
       - name: Push Latest Tag
         run: |
