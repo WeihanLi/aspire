@@ -32,10 +32,10 @@ jobs:
       - name: Push Platform Specific Tags
         run: |
           docker images | grep aspire-dashboard
-          # docker push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:linux-x64 
-          # docker push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:linux-arm64
+          docker push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:latest-linux-x64 
+          docker push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:latest-linux-arm64
 
-      # - name: Push Latest Tag
-      #   run: |
-      #     docker manifest create ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:latest ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:linux-x64 ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:linux-arm64
-      #     docker manifest push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:latest
+      - name: Push Latest Tag
+        run: |
+          docker manifest create ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:latest ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:latest-linux-x64 ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:latest-linux-arm64
+          docker manifest push ${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard:latest
