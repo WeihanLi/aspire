@@ -23,7 +23,7 @@ jobs:
         run: |
           export CI=false && ./dotnet.sh build ./src/Aspire.Dashboard/Aspire.Dashboard.csproj
           # https://learn.microsoft.com/en-us/dotnet/core/containers/publish-configuration#see-also
-          export CI=false && ./dotnet.sh publish ./src/Aspire.Dashboard/Aspire.Dashboard.csproj /t:PublishContainer -p ContainerRepository=${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard -p ContainerRuntimeIdentifiers=\"linux-x64;linux-arm64\"
+          export CI=false && ./dotnet.sh publish ./src/Aspire.Dashboard/Aspire.Dashboard.csproj /t:PublishContainer -p ContainerRepository=${{ env.DOCKER_HUB_USERNAME }}/aspire-dashboard
 
       - name: Login to Docker Hub
         run: |
