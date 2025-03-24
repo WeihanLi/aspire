@@ -7,19 +7,20 @@ namespace Aspire.Cli;
 
 internal interface INuGetPackageCache
 {
-    Task<IEnumerable<NuGetPackage>> GetPackagesAsync(FileInfo projectFile, CancellationToken cancellationToken);
+    Task<IEnumerable<NuGetPackage>> GetPackagesAsync(FileInfo projectFile, bool prerelease, string? source, CancellationToken cancellationToken);
 }
 
 internal sealed class NuGetPackageCache(ILogger<NuGetPackageCache> logger, DotNetCliRunner cliRunner) : INuGetPackageCache
 {
     private const int SearchPageSize = 100;
 
-    public async Task<IEnumerable<NuGetPackage>> GetPackagesAsync(FileInfo projectFile, CancellationToken cancellationToken)
+    public async Task<IEnumerable<NuGetPackage>> GetPackagesAsync(FileInfo projectFile, bool prerelease, string? source, CancellationToken cancellationToken)
     {
         logger.LogDebug("Getting integrations from NuGet");
 
         var collectedPackages = new List<NuGetPackage>();
         var skip = 0;
+
         bool continueFetching;
         do
         {
@@ -27,10 +28,12 @@ internal sealed class NuGetPackageCache(ILogger<NuGetPackageCache> logger, DotNe
             var result = await cliRunner.SearchPackagesAsync(
                 projectFile,
                 "Aspire.Hosting",
+                prerelease,
                 SearchPageSize,
                 skip,
+                source,
                 cancellationToken
-                ).ConfigureAwait(false);
+                );
 
             if (result.ExitCode != 0)
             {

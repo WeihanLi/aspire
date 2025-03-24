@@ -5,36 +5,51 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net.Sockets;
 using System.Text.Json;
+using Aspire.Cli.Backchannel;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using StreamJsonRpc;
 
 namespace Aspire.Cli;
 
-internal sealed class DotNetCliRunner(ILogger<DotNetCliRunner> logger, CliRpcTarget cliRpcTarget)
+internal sealed class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider serviceProvider)
 {
     internal Func<int> GetCurrentProcessId { get; set; } = () => Environment.ProcessId;
 
-    public async Task<int> RunAsync(FileInfo projectFile, string[] args, CancellationToken cancellationToken)
+    public async Task<int> RunAsync(FileInfo projectFile, bool watch, string[] args, IDictionary<string, string>? env, TaskCompletionSource<AppHostBackchannel>? backchannelCompletionSource, CancellationToken cancellationToken)
     {
-        string[] cliArgs = ["run", "--project", projectFile.FullName, "--", ..args];
+        var watchOrRunCommand = watch ? "watch" : "run";
+        string[] cliArgs = [watchOrRunCommand, "--project", projectFile.FullName, "--", ..args];
         return await ExecuteAsync(
             args: cliArgs,
+            env: env,
             workingDirectory: projectFile.Directory!,
-            startBackchannel: true,
+            backchannelCompletionSource: backchannelCompletionSource,
             streamsCallback: null,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+            cancellationToken: cancellationToken);
     }
 
-    public async Task<int> InstallTemplateAsync(string packageName, string version, bool force, CancellationToken cancellationToken)
+    public async Task<int> InstallTemplateAsync(string packageName, string version, string? nugetSource, bool force, CancellationToken cancellationToken)
     {
-        string[] forceArgs = force ? ["--force"] : [];
-        string[] cliArgs = ["new", "install", $"{packageName}::{version}", ..forceArgs];
+        List<string> cliArgs = ["new", "install", $"{packageName}::{version}"];
+
+        if (force)
+        {
+            cliArgs.Add("--force");
+        }
+
+        if (nugetSource is not null)
+        {
+            cliArgs.Add("--nuget-source");
+            cliArgs.Add(nugetSource);
+        }
+
         return await ExecuteAsync(
-            args: cliArgs,
+            args: [.. cliArgs],
+            env: null,
             workingDirectory: new DirectoryInfo(Environment.CurrentDirectory),
-            startBackchannel: false,
+            backchannelCompletionSource: null,
             streamsCallback: null,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+            cancellationToken: cancellationToken);
     }
 
     public async Task<int> NewProjectAsync(string templateName, string name, string outputPath, CancellationToken cancellationToken)
@@ -42,10 +57,11 @@ internal sealed class DotNetCliRunner(ILogger<DotNetCliRunner> logger, CliRpcTar
         string[] cliArgs = ["new", templateName, "--name", name, "--output", outputPath];
         return await ExecuteAsync(
             args: cliArgs,
+            env: null,
             workingDirectory: new DirectoryInfo(Environment.CurrentDirectory),
-            startBackchannel: false,
+            backchannelCompletionSource: null,
             streamsCallback: null,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+            cancellationToken: cancellationToken);
     }
 
     internal static string GetBackchannelSocketPath()
@@ -63,85 +79,35 @@ internal sealed class DotNetCliRunner(ILogger<DotNetCliRunner> logger, CliRpcTar
         return socketPath;
     }
 
-    private async Task StartBackchannelAsync(string socketPath, CancellationToken cancellationToken)
+    public async Task<int> ExecuteAsync(string[] args, IDictionary<string, string>? env, DirectoryInfo workingDirectory, TaskCompletionSource<AppHostBackchannel>? backchannelCompletionSource, Action<StreamWriter, StreamReader, StreamReader>? streamsCallback, CancellationToken cancellationToken)
     {
-        try
-        {
-            logger.LogDebug("Starting AppHost backchannel on socket path: {SocketPath}", socketPath);
-
-            using var serverSocket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-            var endpoint = new UnixDomainSocketEndPoint(socketPath);
-            serverSocket.Bind(endpoint);
-            serverSocket.Listen(1);
-
-            logger.LogDebug("Waiting for AppHost to connect to backchannel on socket path: {SocketPath}", socketPath);
-
-            using var clientSocket = await serverSocket.AcceptAsync(cancellationToken).ConfigureAwait(false);
-
-            logger.LogDebug("AppHost to connected to backchannel on socket path: {SocketPath}", socketPath);
-
-            using var stream = new NetworkStream(clientSocket, true);
-            var rpc = JsonRpc.Attach(stream, cliRpcTarget);
-
-            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
-            do
-            {
-                var sendTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-                logger.LogDebug("Sending PingAsync to AppHost backchannel at {SocketPath}", socketPath);
-
-                var responseTimestamp = await rpc.InvokeAsync<long>("PingAsync", sendTimestamp).ConfigureAwait(false);
-                Debug.Assert(sendTimestamp == responseTimestamp);
-                var roundtripMilliseconds = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - sendTimestamp;
-
-                logger.LogDebug("AppHost PingAsync round trip time is: {RoundtripMilliseconds} ms", roundtripMilliseconds);
-            } while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false));
-        }
-        catch (OperationCanceledException ex)
-        {
-            logger.LogDebug(ex, "Shutting down AppHost backchannel because of cancellation.");
-            return;
-        }
-        catch (StreamJsonRpc.ConnectionLostException ex) when (cancellationToken.IsCancellationRequested)
-        {
-            logger.LogDebug(ex, "Ignoring ConnectionLostException because of cancellation.");
-            return;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "AppHost backchannel failed unexpectedly.");
-            return;
-        }
-    }
-
-    public async Task<int> ExecuteAsync(string[] args, DirectoryInfo workingDirectory, bool startBackchannel, Action<StreamWriter, StreamReader, StreamReader>? streamsCallback, CancellationToken cancellationToken)
-    {
-        var redirectStreams = streamsCallback is { };
-
         var startInfo = new ProcessStartInfo("dotnet")
         {
             WorkingDirectory = workingDirectory.FullName,
             UseShellExecute = false,
             CreateNoWindow = true,
-            RedirectStandardInput = redirectStreams,
-            RedirectStandardOutput = redirectStreams,
-            RedirectStandardError = redirectStreams
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
         };
+
+        if (env is not null)
+        {
+            foreach (var envKvp in env)
+            {
+                startInfo.EnvironmentVariables[envKvp.Key] = envKvp.Value;
+            }
+        }
 
         foreach (var a in args)
         {
             startInfo.ArgumentList.Add(a);
         }
 
-        // The CLI and the AppHost can communicate to one another using a RPC protocol that makes
-        // use of StreamJsonRpc. Not all commands need the backchannel so we selectively enable it.
-        // When it is enabled we signal the path to the unix socket or named pipe on the
-        // ASPIRE_LAUNCHER_BACKCHANNEL_PATH environment variable.
-        if (startBackchannel)
+        var socketPath = GetBackchannelSocketPath();
+        if (backchannelCompletionSource is not null)
         {
-            var socketPath = GetBackchannelSocketPath();
-            _ = StartBackchannelAsync(socketPath, cancellationToken);
-            startInfo.EnvironmentVariables["ASPIRE_LAUNCHER_BACKCHANNEL_PATH"] = socketPath;
+            startInfo.EnvironmentVariables["ASPIRE_BACKCHANNEL_PATH"] = socketPath;
         }
 
         // The AppHost uses this environment variable to signal to the CliOrphanDetector which process
@@ -152,43 +118,111 @@ internal sealed class DotNetCliRunner(ILogger<DotNetCliRunner> logger, CliRpcTar
 
         using var process = new Process { StartInfo = startInfo };
 
-        // Wiring up these event handlers so that we can interleave the stderror and stdout
-        // into the logs of the CLI. This means that the output of this will be driven by the
-        // logger settings in the CLI (probably with a --debug) switch.
-        process.OutputDataReceived += (sender, args) => {
-            if (args.Data is { } data)
-            {
-                logger.LogDebug("dotnet output: {Data}", data);
-            }
-        };
-        process.ErrorDataReceived += (sender, args) => {
-            if (args.Data is { } data)
-            {
-                logger.LogError("dotnet error: {Data}", data);
-            }
-        };
-
         logger.LogDebug("Running dotnet with args: {Args}", string.Join(" ", args));
 
         var started = process.Start();
 
+        if (backchannelCompletionSource is not null)
+        {
+            _ = StartBackchannelAsync(process, socketPath, backchannelCompletionSource, cancellationToken);
+        }
+
+        if (streamsCallback is null)
+        {
+            var pendingStdoutStreamForwarder = Task.Run(async () => {
+                await ForwardStreamToLoggerAsync(
+                    process.StandardOutput,
+                    "stdout",
+                    process,
+                    cancellationToken);
+                }, cancellationToken);
+
+            var pendingStderrStreamForwarder = Task.Run(async () => {
+                await ForwardStreamToLoggerAsync(
+                    process.StandardError,
+                    "stderr",
+                    process,
+                    cancellationToken);
+                }, cancellationToken);
+        }
+
         if (!started)
         {
+            logger.LogDebug("Failed to start dotnet process with args: {Args}", string.Join(" ", args));
             return ExitCodeConstants.FailedToDotnetRunAppHost;
+        }
+        else
+        {
+            logger.LogDebug("Started dotnet with PID: {ProcessId}", process.Id);
         }
 
         // This is so that callers can get a handle to the raw stream output. This is important
         // because some commmands (like package search) return JSON data that we need to parse.
         streamsCallback?.Invoke(process.StandardInput, process.StandardOutput, process.StandardError);
 
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        logger.LogDebug("Waiting for dotnet process to exit with PID: {ProcessId}", process.Id);
+
+        await process.WaitForExitAsync(cancellationToken);
 
         if (!process.HasExited)
         {
+            logger.LogDebug("dotnet process with PID: {ProcessId} has not exited, killing it.", process.Id);
             process.Kill(false);
+        }
+        else
+        {
+            logger.LogDebug("dotnet process with PID: {ProcessId} has exited with code: {ExitCode}", process.Id, process.ExitCode);
         }
 
         return process.ExitCode;
+
+        async Task ForwardStreamToLoggerAsync(StreamReader reader, string identifier, Process process, CancellationToken cancellationToken)
+        {
+            logger.LogDebug(
+                "Starting to forward stream with identifier '{Identifier}' on process '{ProcessId}' to logger",
+                identifier,
+                process.Id
+                );
+
+            while (!cancellationToken.IsCancellationRequested && !reader.EndOfStream)
+            {
+                var line = await reader.ReadLineAsync(cancellationToken);
+                logger.LogDebug(
+                    "dotnet({ProcessId}) {Identifier}: {Line}",
+                    process.Id,
+                    identifier,
+                    line
+                    );
+            }
+        }
+    }
+
+    private async Task StartBackchannelAsync(Process process, string socketPath, TaskCompletionSource<AppHostBackchannel> backchannelCompletionSource, CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+
+        var backchannel = serviceProvider.GetRequiredService<AppHostBackchannel>();
+        var connectionAttempts = 0;
+
+        logger.LogDebug("Starting backchannel connection to AppHost at {SocketPath}", socketPath);
+
+        do
+        {
+            try
+            {
+                logger.LogTrace("Attempting to connect to AppHost backchannel at {SocketPath} (attempt {Attempt})", socketPath, connectionAttempts++);
+                await backchannel.ConnectAsync(process, socketPath, cancellationToken).ConfigureAwait(false);
+                backchannelCompletionSource.SetResult(backchannel);
+                logger.LogDebug("Connected to AppHost backchannel at {SocketPath}", socketPath);
+                return;
+            }
+            catch (SocketException ex)
+            {
+                // This is trace level diagnostics because its very noisy.
+                logger.LogTrace(ex, "Failed to connect to AppHost backchannel (attempt {Attempt})", connectionAttempts);
+            }
+
+        } while (await timer.WaitForNextTickAsync(cancellationToken));
     }
 
     public async Task<int> AddPackageAsync(FileInfo projectFilepath, string packageName, string packageVersion, CancellationToken cancellationToken)
@@ -206,10 +240,11 @@ internal sealed class DotNetCliRunner(ILogger<DotNetCliRunner> logger, CliRpcTar
 
         var result = await ExecuteAsync(
             args: cliArgs,
+            env: null,
             workingDirectory: projectFilepath.Directory!,
-            startBackchannel: false,
+            backchannelCompletionSource: null,
             streamsCallback: (_, _, _) => { },
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+            cancellationToken: cancellationToken);
 
         if (result != 0)
         {
@@ -223,9 +258,9 @@ internal sealed class DotNetCliRunner(ILogger<DotNetCliRunner> logger, CliRpcTar
         return result;
     }
 
-    public async Task<(int ExitCode, NuGetPackage[]? Packages)> SearchPackagesAsync(FileInfo projectFilePath, string query, int take, int skip, CancellationToken cancellationToken)
+    public async Task<(int ExitCode, NuGetPackage[]? Packages)> SearchPackagesAsync(FileInfo projectFilePath, string query, bool prerelease, int take, int skip, string? nugetSource, CancellationToken cancellationToken)
     {
-        string[] cliArgs = [
+        List<string> cliArgs = [
             "package",
             "search",
             query,
@@ -237,27 +272,52 @@ internal sealed class DotNetCliRunner(ILogger<DotNetCliRunner> logger, CliRpcTar
             "json"
         ];
 
-        StreamReader? standardOutput = null;
+        if (nugetSource is not null)
+        {
+            cliArgs.Add("--source");
+            cliArgs.Add(nugetSource);
+        }
+
+        if (prerelease)
+        {
+            cliArgs.Add("--prerelease");
+        }
+
+        string? stdout = null;
+        string? stderr = null;
 
         var result = await ExecuteAsync(
-            args: cliArgs,
+            args: cliArgs.ToArray(),
+            env: null,
             workingDirectory: projectFilePath.Directory!,
-            startBackchannel: false,
+            backchannelCompletionSource: null,
             streamsCallback: (_, output, _) => {
-                standardOutput = output;
+                // We need to read the output of the streams
+                // here otherwise th process will never exit.
+                stdout = output.ReadToEnd();
+                stderr = output.ReadToEnd();
             },
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+            cancellationToken: cancellationToken);
 
         if (result != 0)
         {
-            logger.LogError("Failed to search for packages. See debug logs for more details.");
+            logger.LogError(
+                "Failed to search for packages. See debug logs for more details. Stderr: {Stderr}, Stdout: {Stdout}",
+                stderr,
+                stdout
+                );
             return (result, null);
         }
         else
         {
-            var json = standardOutput?.ReadToEnd();
+            if (stdout is null)
+            {
+                logger.LogError("Failed to read stdout from the process. This should never happen.");
+                return (ExitCodeConstants.FailedToAddPackage, null);
+            }
+
             var foundPackages = new List<NuGetPackage>();
-            var document = JsonDocument.Parse(json!);
+            var document = JsonDocument.Parse(stdout);
 
             var searchResultsArray = document.RootElement.GetProperty("searchResult");
 
