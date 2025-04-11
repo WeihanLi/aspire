@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Diagnostics;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Azure;
 using Aspire.Hosting.Azure.AppContainers;
@@ -10,7 +11,6 @@ using Azure.Provisioning.AppContainers;
 using Azure.Provisioning.Authorization;
 using Azure.Provisioning.ContainerRegistry;
 using Azure.Provisioning.Expressions;
-using Azure.Provisioning.KeyVault;
 using Azure.Provisioning.OperationalInsights;
 using Azure.Provisioning.Roles;
 using Azure.Provisioning.Storage;
@@ -28,7 +28,11 @@ public static class AzureContainerAppExtensions
     /// Adds the necessary infrastructure for Azure Container Apps to the distributed application builder.
     /// </summary>
     /// <param name="builder">The distributed application builder.</param>
-    public static IDistributedApplicationBuilder AddAzureContainerAppsInfrastructure(this IDistributedApplicationBuilder builder)
+    [Obsolete($"Use {nameof(AddAzureContainerAppEnvironment)} instead. This method will be removed in a future version.")]
+    public static IDistributedApplicationBuilder AddAzureContainerAppsInfrastructure(this IDistributedApplicationBuilder builder) =>
+        AddAzureContainerAppsInfrastructureCore(builder);
+
+    internal static IDistributedApplicationBuilder AddAzureContainerAppsInfrastructureCore(this IDistributedApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
@@ -52,7 +56,7 @@ public static class AzureContainerAppExtensions
     /// <returns><see cref="IResourceBuilder{T}"/></returns>
     public static IResourceBuilder<AzureContainerAppEnvironmentResource> AddAzureContainerAppEnvironment(this IDistributedApplicationBuilder builder, string name)
     {
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppsInfrastructureCore();
 
         // Only support one temporarily until we can support multiple environments
         // and allowing each container app to be explicit about which environment it uses
@@ -65,6 +69,7 @@ public static class AzureContainerAppExtensions
 
         var containerAppEnvResource = new AzureContainerAppEnvironmentResource(name, static infra =>
         {
+            var appEnvResource = (AzureContainerAppEnvironmentResource)infra.AspireResource;
             var userPrincipalId = new ProvisioningParameter("userPrincipalId", typeof(string));
 
             infra.Add(userPrincipalId);
@@ -76,14 +81,24 @@ public static class AzureContainerAppExtensions
 
             infra.Add(tags);
 
-            var identity = new UserAssignedIdentity("mi")
+            ProvisioningVariable? resourceToken = null;
+            if (appEnvResource.UseAzdNamingConvention)
+            {
+                resourceToken = new ProvisioningVariable("resourceToken", typeof(string))
+                {
+                    Value = BicepFunction.GetUniqueString(BicepFunction.GetResourceGroup().Id)
+                };
+                infra.Add(resourceToken);
+            }
+
+            var identity = new UserAssignedIdentity(Infrastructure.NormalizeBicepIdentifier($"{appEnvResource.Name}_mi"))
             {
                 Tags = tags
             };
 
             infra.Add(identity);
 
-            var containerRegistry = new ContainerRegistryService("acr")
+            var containerRegistry = new ContainerRegistryService(Infrastructure.NormalizeBicepIdentifier($"{appEnvResource.Name}_acr"))
             {
                 Sku = new() { Name = ContainerRegistrySkuName.Basic },
                 Tags = tags
@@ -97,7 +112,7 @@ public static class AzureContainerAppExtensions
             pullRa.Name = BicepFunction.CreateGuid(containerRegistry.Id, identity.Id, pullRa.RoleDefinitionId);
             infra.Add(pullRa);
 
-            var laWorkspace = new OperationalInsightsWorkspace("law")
+            var laWorkspace = new OperationalInsightsWorkspace(Infrastructure.NormalizeBicepIdentifier($"{appEnvResource.Name}_law"))
             {
                 Sku = new() { Name = OperationalInsightsWorkspaceSkuName.PerGB2018 },
                 Tags = tags
@@ -105,7 +120,7 @@ public static class AzureContainerAppExtensions
 
             infra.Add(laWorkspace);
 
-            var containerAppEnvironment = new ContainerAppManagedEnvironment("cae")
+            var containerAppEnvironment = new ContainerAppManagedEnvironment(appEnvResource.GetBicepIdentifier())
             {
                 WorkloadProfiles = [
                     new ContainerAppWorkloadProfile()
@@ -150,9 +165,10 @@ public static class AzureContainerAppExtensions
 
             var resource = (AzureContainerAppEnvironmentResource)infra.AspireResource;
 
+            StorageAccount? storageVolume = null;
             if (resource.VolumeNames.Count > 0)
             {
-                var storageVolume = new StorageAccount("storageVolume")
+                storageVolume = new StorageAccount(Infrastructure.NormalizeBicepIdentifier($"{appEnvResource.Name}_storageVolume"))
                 {
                     Tags = tags,
                     Sku = new StorageSku() { Name = StorageSkuName.StandardLrs },
@@ -201,38 +217,30 @@ public static class AzureContainerAppExtensions
                     infra.Add(containerAppStorage);
 
                     managedStorages[outputName] = containerAppStorage;
-                }
-            }
 
-            // REVIEW: These don't need to be coupled to the container app environment
-            var kvs = new Dictionary<string, KeyVaultService>();
-
-            foreach (var (key, _) in resource.SecretKeyVaultNames)
-            {
-                var kvIdentifier = Infrastructure.NormalizeBicepIdentifier($"kv-{key}");
-                var kv = new KeyVaultService(kvIdentifier)
-                {
-                    Properties = new()
+                    if (appEnvResource.UseAzdNamingConvention)
                     {
-                        TenantId = BicepFunction.GetTenant().TenantId,
-                        Sku = new KeyVaultSku()
+                        var volumeName = output.volume.Type switch
                         {
-                            Family = KeyVaultSkuFamily.A,
-                            Name = KeyVaultSkuName.Standard
-                        },
-                        EnableRbacAuthorization = true
-                    },
-                    Tags = tags,
-                };
+                            ContainerMountType.BindMount => $"bm{output.index}",
+                            ContainerMountType.Volume => output.volume.Source ?? $"v{output.index}",
+                            _ => throw new NotSupportedException()
+                        };
 
-                infra.Add(kv);
+                        // Remove '.' and '-' characters from volumeName
+                        volumeName = volumeName.Replace(".", "").Replace("-", "");
 
-                // Role assignments
-                var kvra = kv.CreateRoleAssignment(KeyVaultBuiltInRole.KeyVaultAdministrator, identity);
-                kvra.Name = BicepFunction.CreateGuid(kv.Id, identity.Id, kvra.RoleDefinitionId);
-                infra.Add(kvra);
+                        share.Name = BicepFunction.Take(
+                            BicepFunction.Interpolate(
+                                $"{BicepFunction.ToLower(output.resource.Name)}-{BicepFunction.ToLower(volumeName)}"),
+                            60);
 
-                kvs[key] = kv;
+                        containerAppStorage.Name = BicepFunction.Take(
+                            BicepFunction.Interpolate(
+                                $"{BicepFunction.ToLower(output.resource.Name)}-{BicepFunction.ToLower(volumeName)}"),
+                            32);
+                    }
+                }
             }
 
             // Add the volume outputs to the container app environment storage
@@ -240,17 +248,31 @@ public static class AzureContainerAppExtensions
             {
                 infra.Add(new ProvisioningOutput(key, typeof(string))
                 {
-                    Value = value.Name
+                    // use an expression here in case the resource's Name was set to a function expression above
+                    Value = new MemberExpression(new IdentifierExpression(value.BicepIdentifier), "name")
                 });
             }
 
-            // Add the secret outputs to the key vaults
-            foreach (var (key, value) in kvs)
+            if (appEnvResource.UseAzdNamingConvention)
             {
-                infra.Add(new ProvisioningOutput(key, typeof(string))
+                Debug.Assert(resourceToken is not null);
+
+                identity.Name = BicepFunction.Interpolate($"mi-{resourceToken}");
+                containerRegistry.Name = new FunctionCallExpression(
+                    new IdentifierExpression("replace"),
+                    new InterpolatedStringExpression([
+                        new StringLiteralExpression("acr-"),
+                        new IdentifierExpression(resourceToken.BicepIdentifier)
+                    ]),
+                    new StringLiteralExpression("-"),
+                    new StringLiteralExpression(""));
+                laWorkspace.Name = BicepFunction.Interpolate($"law-{resourceToken}");
+                containerAppEnvironment.Name = BicepFunction.Interpolate($"cae-{resourceToken}");
+
+                if (storageVolume is not null)
                 {
-                    Value = value.Name
-                });
+                    storageVolume.Name = BicepFunction.Interpolate($"vol{resourceToken}");
+                }
             }
 
             infra.Add(new ProvisioningOutput("MANAGED_IDENTITY_NAME", typeof(string))
@@ -312,5 +334,22 @@ public static class AzureContainerAppExtensions
         }
 
         return builder.AddResource(containerAppEnvResource);
+    }
+
+    /// <summary>
+    /// Configures the container app environment resources to use the same naming conventions as azd.
+    /// </summary>
+    /// <param name="builder">The AzureContainerAppEnvironmentResource to configure.</param>
+    /// <returns><see cref="IResourceBuilder{T}"/></returns>
+    /// <remarks>
+    /// By default, the container app environment resources use a different naming convention than azd.
+    /// 
+    /// This method allows for reusing the previously deployed resources if the application was deployed using
+    /// azd without calling <see cref="AddAzureContainerAppEnvironment"/>
+    /// </remarks>
+    public static IResourceBuilder<AzureContainerAppEnvironmentResource> WithAzdResourceNaming(this IResourceBuilder<AzureContainerAppEnvironmentResource> builder)
+    {
+        builder.Resource.UseAzdNamingConvention = true;
+        return builder;
     }
 }

@@ -11,11 +11,11 @@ internal interface IAzureContainerAppEnvironment
     IManifestExpressionProvider ContainerAppDomain { get; }
     IManifestExpressionProvider ContainerRegistryUrl { get; }
     IManifestExpressionProvider ContainerRegistryManagedIdentityId { get; }
-    IManifestExpressionProvider ManagedIdentityId { get; }
     IManifestExpressionProvider LogAnalyticsWorkspaceId { get; }
+    IManifestExpressionProvider PrincipalId { get; }
     IManifestExpressionProvider PrincipalName { get; }
     IManifestExpressionProvider ContainerAppEnvironmentName { get; }
 
     IManifestExpressionProvider GetSecretOutputKeyVault(AzureBicepResource resource);
-    IManifestExpressionProvider GetVolumeStorage(IResource resource, ContainerMountType type, string volumeIndex);
+    IManifestExpressionProvider GetVolumeStorage(IResource resource, ContainerMountAnnotation volume, int volumeIndex);
 }

@@ -3,7 +3,6 @@
 
 #pragma warning disable ASPIREAZURE001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
 
-using System.Runtime.CompilerServices;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Utils;
 using Azure.Provisioning;
@@ -12,14 +11,16 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
-using Xunit.Abstractions;
+using static Aspire.Hosting.Utils.AzureManifestUtils;
 
 namespace Aspire.Hosting.Azure.Tests;
 
 public class AzurePublisherTests(ITestOutputHelper output)
 {
-    [Fact]
-    public async Task PublishAsync_GeneratesMainBicep()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task PublishAsync_GeneratesMainBicep(bool useContext)
     {
         using var tempDirectory = new TempDirectory();
         using var tempDir = new TempDirectory();
@@ -36,6 +37,13 @@ public class AzurePublisherTests(ITestOutputHelper output)
         var storageSku = builder.AddParameter("storageSku", "Standard_LRS", publishValueAsDefault: true);
         var description = builder.AddParameter("skuDescription", "The sku is ", publishValueAsDefault: true);
         var skuDescriptionExpr = ReferenceExpression.Create($"{description} {storageSku}");
+
+        var kvName = builder.AddParameter("kvName");
+        var kvRg = builder.AddParameter("kvRg", "rg-shared");
+
+        builder.AddAzureKeyVault("kv").AsExisting(kvName, kvRg);
+
+        builder.AddAzureStorage("existing-storage").PublishAsExisting("images", "rg-shared");
 
         var pgdb = builder.AddAzurePostgresFlexibleServer("pg").AddDatabase("pgdb");
         var cosmos = builder.AddAzureCosmosDB("account").AddCosmosDatabase("db");
@@ -73,12 +81,26 @@ public class AzurePublisherTests(ITestOutputHelper output)
 
         await ExecuteBeforeStartHooksAsync(app, default);
 
-        var publisher = new AzurePublisher("azure",
-            options,
-            provisionerOptions,
-            NullLogger<AzurePublisher>.Instance);
+        if (useContext)
+        {
+            // tests the public AzurePublishingContext API
+            var context = new AzurePublishingContext(
+                options.CurrentValue,
+                provisionerOptions.Value,
+                NullLogger<AzurePublishingContext>.Instance);
 
-        await publisher.PublishAsync(model, default);
+            await context.WriteModelAsync(model, default);
+        }
+        else
+        {
+            // tests via the internal Publisher object
+            var publisher = new AzurePublisher("azure",
+                options,
+                provisionerOptions,
+                NullLogger<AzurePublisher>.Instance);
+
+            await publisher.PublishAsync(model, default);
+        }
 
         Assert.True(File.Exists(Path.Combine(tempDir.Path, "main.bicep")));
 
@@ -92,6 +114,10 @@ public class AzurePublisherTests(ITestOutputHelper output)
             param location string
 
             param principalId string
+
+            param kvRg string
+
+            param kvName string
 
             param storageSku string = 'Standard_LRS'
 
@@ -113,6 +139,23 @@ public class AzurePublisherTests(ITestOutputHelper output)
               params: {
                 location: location
                 userPrincipalId: principalId
+              }
+            }
+
+            module kv 'kv/kv.bicep' = {
+              name: 'kv'
+              scope: resourceGroup(kvRg)
+              params: {
+                location: location
+                kvName: kvName
+              }
+            }
+
+            module existing_storage 'existing-storage/existing-storage.bicep' = {
+              name: 'existing-storage'
+              scope: resourceGroup('rg-shared')
+              params: {
+                location: location
               }
             }
 
@@ -193,7 +236,7 @@ public class AzurePublisherTests(ITestOutputHelper output)
 
             output account_connectionString string = account.outputs.connectionString
 
-            output acaEnv_AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID string = acaEnv.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID
+            output acaEnv_AZURE_CONTAINER_APPS_ENVIRONMENT_DEFAULT_DOMAIN string = acaEnv.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_DEFAULT_DOMAIN
 
             output acaEnv_AZURE_CONTAINER_APPS_ENVIRONMENT_ID string = acaEnv.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID
 
@@ -204,13 +247,12 @@ public class AzurePublisherTests(ITestOutputHelper output)
             output storage_blobEndpoint string = storage.outputs.blobEndpoint
 
             output acaEnv_AZURE_CONTAINER_REGISTRY_ENDPOINT string = acaEnv.outputs.AZURE_CONTAINER_REGISTRY_ENDPOINT
+
+            output acaEnv_AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID string = acaEnv.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID
             """;
         output.WriteLine(content);
         Assert.Equal(expectedBicep, content, ignoreAllWhiteSpace: true, ignoreLineEndingDifferences: true);
     }
-
-    [UnsafeAccessor(UnsafeAccessorKind.Method, Name = "ExecuteBeforeStartHooksAsync")]
-    private static extern Task ExecuteBeforeStartHooksAsync(DistributedApplication app, CancellationToken cancellationToken);
 
     private sealed class OptionsMonitor(AzurePublisherOptions options) : IOptionsMonitor<AzurePublisherOptions>
     {

@@ -37,19 +37,13 @@ public class BuildEnvironment
     public static bool IsRunningOnCI => IsRunningOnHelix || IsRunningOnCIBuildMachine || IsRunningOnGithubActions;
 
     private static readonly Lazy<BuildEnvironment> s_instance_80 = new(() =>
-        new BuildEnvironment(
-            templatesCustomHive: TemplatesCustomHive.TemplatesHive,
-            sdkDirName: "dotnet-8"));
+        new BuildEnvironment(sdkDirName: "dotnet-8"));
 
     private static readonly Lazy<BuildEnvironment> s_instance_90 = new(() =>
-        new BuildEnvironment(
-            templatesCustomHive: TemplatesCustomHive.TemplatesHive,
-            sdkDirName: "dotnet-9"));
+        new BuildEnvironment(sdkDirName: "dotnet-9"));
 
     private static readonly Lazy<BuildEnvironment> s_instance_90_80 = new(() =>
-        new BuildEnvironment(
-            templatesCustomHive: TemplatesCustomHive.TemplatesHive,
-            sdkDirName: "dotnet-tests"));
+        new BuildEnvironment(sdkDirName: "dotnet-tests"));
 
     public static BuildEnvironment ForPreviousSdkOnly => s_instance_80.Value;
     public static BuildEnvironment ForCurrentSdkOnly => s_instance_90.Value;
@@ -67,7 +61,7 @@ public class BuildEnvironment
             _ => throw new ArgumentOutOfRangeException(nameof(DefaultTargetFramework))
         };
 
-    public BuildEnvironment(bool useSystemDotNet = false, TemplatesCustomHive? templatesCustomHive = default, string sdkDirName = "dotnet-tests")
+    public BuildEnvironment(bool useSystemDotNet = false, string sdkDirName = "dotnet-tests")
     {
         UsesCustomDotNet = !useSystemDotNet;
         RepoRoot = TestUtils.FindRepoRoot();
@@ -107,7 +101,11 @@ public class BuildEnvironment
                 sdkForTemplatePath = Path.GetDirectoryName(dotnetPath)!;
             }
 
-            BuiltNuGetsPath = Path.Combine(RepoRoot.FullName, "artifacts", "packages", EnvironmentVariables.BuildConfiguration, "Shipping");
+#if RELEASE
+            BuiltNuGetsPath = Path.Combine(RepoRoot.FullName, "artifacts", "packages", "Release", "Shipping");
+#else
+            BuiltNuGetsPath = Path.Combine(RepoRoot.FullName, "artifacts", "packages", "Debug", "Shipping");
+#endif
 
             PlaywrightProvider.DetectAndSetInstalledPlaywrightDependenciesPath(RepoRoot);
         }
@@ -160,8 +158,6 @@ public class BuildEnvironment
         // Avoid using the msbuild terminal logger, so the output can be read
         // in the tests
         EnvVars["_MSBUILDTLENABLED"] = "0";
-        // .. and disable new output style for vstest
-        EnvVars["VsTestUseMSBuildOutput"] = "false";
         EnvVars["SkipAspireWorkloadManifest"] = "true";
 
         DotNet = Path.Combine(sdkForTemplatePath!, "dotnet");
@@ -208,7 +204,7 @@ public class BuildEnvironment
             }
         }
 
-        TemplatesCustomHive = templatesCustomHive;
+        TemplatesCustomHive = TemplatesCustomHive.TemplatesHive;
         TemplatesCustomHive?.EnsureInstalledAsync(this).Wait();
 
         static void CleanupTestRootPath()
