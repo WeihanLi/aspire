@@ -31,4 +31,4 @@ jobs:
           # build dest aspire-dashboard
           docker buildx build --file ./src/Aspire.Dashboard/Dockerfile --platform linux/amd64,linux/arm64 --tag weihanli/aspire-dashboard --push .
           # inspect images
-          docker images | grep aspire-dashboard
+          docker image ls | grep aspire-dashboard
