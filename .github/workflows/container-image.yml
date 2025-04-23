@@ -28,11 +28,7 @@ jobs:
           export CI=false && ./dotnet.sh build ./src/Aspire.Dashboard/Aspire.Dashboard.csproj
           # https://learn.microsoft.com/en-us/dotnet/core/containers/publish-configuration#see-also
           export CI=false && ./dotnet.sh publish ./src/Aspire.Dashboard/Aspire.Dashboard.csproj /t:PublishContainer -p ContainerRepository=weihanli/aspire-dashboard-base -p ContainerRegistry=docker.io
-          docker manifest create weihanli/aspire-dashboard-base:latest weihanli/aspire-dashboard-base:latest-linux-x64 weihanli/aspire-dashboard-base:latest-linux-arm64
-          docker manifest push weihanli/aspire-dashboard-base:latest
+          # build dest aspire-dashboard
           docker buildx build --file ./src/Aspire.Dashboard/Dockerfile --platform linux/amd64,linux/arm64 --tag weihanli/aspire-dashboard --push .
-
-      - name: Inspect Images
-        run: |
+          # inspect images
           docker images | grep aspire-dashboard
-
