@@ -14,6 +14,14 @@ Github Action: https://github.com/WeihanLi/aspire/actions/workflows/container-im
 
 Usage example:
 
+Run container remove when stopped
+
+```sh
+docker run -d --rm --name aspire-dashboard -p 18888:18888 -p 4317:18889 weihanli/aspire-dashboard:latest
+```
+
+Run container restart always
+
 ```sh
 docker run -d --restart=always --name aspire-dashboard -p 18888:18888 -p 4317:18889 weihanli/aspire-dashboard:latest
 ```
