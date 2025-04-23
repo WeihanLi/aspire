@@ -2,6 +2,13 @@ name: Build and Push Container Image
 
 on:
   workflow_dispatch:
+    # https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions#onworkflow_dispatchinputs
+    inputs:
+      name:
+        type: tag
+        default: ''
+        description: "container image tag"
+        required: false
 
 env:
   DOCKER_HUB_USERNAME: "weihanli"
@@ -23,12 +30,28 @@ jobs:
         run: |
           echo ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }} | docker login -u ${{ env.DOCKER_HUB_USERNAME }} --password-stdin
 
-      - name: Build
+      - name: dotnet Build
         run: |
           export CI=false && ./dotnet.sh build ./src/Aspire.Dashboard/Aspire.Dashboard.csproj
           # https://learn.microsoft.com/en-us/dotnet/core/containers/publish-configuration#see-also
           export CI=false && ./dotnet.sh publish ./src/Aspire.Dashboard/Aspire.Dashboard.csproj /t:PublishContainer -p ContainerRepository=weihanli/aspire-dashboard-base -p ContainerRegistry=docker.io
-          # build dest aspire-dashboard
-          docker buildx build --file ./src/Aspire.Dashboard/Dockerfile --platform linux/amd64,linux/arm64 --tag weihanli/aspire-dashboard --push .
-          # inspect images
-          docker image ls | grep aspire-dashboard
+
+      - name: Build Tag Image
+        id: docker_build_release
+        uses: docker/build-push-action@v5
+        if: ${{ github.event.inputs.tag != '' }}
+        with:
+          context: ./
+          file: ./src/Aspire.Dashboard/Dockerfile
+          push: true
+          tags: weihanli/dotnet-exec:${{ github.event.inputs.tag }}
+          platforms: "linux/amd64,linux/arm64"
+
+      - name: Build Latest Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./
+          file: ./src/Aspire.Dashboard/Dockerfile
+          push: true
+          tags: "weihanli/aspire-dashboard:latest"
+          platforms: "linux/amd64,linux/arm64"
