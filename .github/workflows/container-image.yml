@@ -19,6 +19,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Login to Docker Hub
+        run: |
+          echo ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }} | docker login -u ${{ env.DOCKER_HUB_USERNAME }} --password-stdin
+
       - name: Build
         run: |
           export CI=false && ./dotnet.sh build ./src/Aspire.Dashboard/Aspire.Dashboard.csproj
@@ -28,10 +32,6 @@ jobs:
           # docker manifest push weihanli/aspire-dashboard-base:latest
           docker images | grep aspire-dashboard
           docker buildx build --file ./src/Aspire.Dashboard/Dockerfile --platform linux/amd64,linux/arm64 --tag weihanli/aspire-dashboard-base .
-
-      - name: Login to Docker Hub
-        run: |
-          echo ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }} | docker login -u ${{ env.DOCKER_HUB_USERNAME }} --password-stdin
 
       - name: Push Platform Specific Tags
         run: |
