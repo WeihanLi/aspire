@@ -10,6 +10,8 @@ Customized container image: https://hub.docker.com/r/weihanli/aspire-dashboard
 
 Github Action: https://github.com/WeihanLi/aspire/actions/workflows/container-image.yml
 
+[Dockerfile](./src/Aspire.Dashboard/Dockerfile) and [container image build workflow](./.github/workflows/container-image.yml)
+
 Usage example:
 
 ```sh
