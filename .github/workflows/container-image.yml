@@ -34,7 +34,7 @@ jobs:
         run: |
           export CI=false && ./dotnet.sh build ./src/Aspire.Dashboard/Aspire.Dashboard.csproj
           # https://learn.microsoft.com/en-us/dotnet/core/containers/publish-configuration#see-also
-          export CI=false && ./dotnet.sh publish ./src/Aspire.Dashboard/Aspire.Dashboard.csproj /t:PublishContainer -p ContainerRepository=weihanli/aspire-dashboard-base -p ContainerImageTag=${{ github.event.inputs.tag }} -p ContainerRuntimeIdentifiers=linux-x64;linux-arm64 -p ContainerRegistry=docker.io
+          export CI=false && ./dotnet.sh publish ./src/Aspire.Dashboard/Aspire.Dashboard.csproj /t:PublishContainer -p ContainerRepository=weihanli/aspire-dashboard-base -p ContainerImageTag=${{ github.event.inputs.tag }} -p ContainerRegistry=docker.io
 
       - name: Build Dockerfile
         run: |
