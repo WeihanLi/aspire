@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     # https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions#onworkflow_dispatchinputs
     inputs:
-      name:
-        type: tag
+      tag:
+        type: string
         default: ''
-        description: "container image tag"
+        description: "container image tag, use latest if not specified"
         required: false
 
 env:
