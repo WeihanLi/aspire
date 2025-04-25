@@ -30,11 +30,10 @@ jobs:
         run: |
           echo ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }} | docker login -u ${{ env.DOCKER_HUB_USERNAME }} --password-stdin
 
-      - name: dotnet Build
+      - name: dotnet publish container
         run: |
-          export CI=false && ./dotnet.sh build ./src/Aspire.Dashboard/Aspire.Dashboard.csproj
           # https://learn.microsoft.com/en-us/dotnet/core/containers/publish-configuration#see-also
-          export CI=false && ./dotnet.sh publish ./src/Aspire.Dashboard/Aspire.Dashboard.csproj /t:PublishContainer -p ContainerRepository=weihanli/aspire-dashboard-base -p ContainerImageTag=${{ github.event.inputs.tag }} -p ContainerRegistry=docker.io
+          export CI=false && ./dotnet.sh publish ./src/Aspire.Dashboard/Aspire.Dashboard.csproj /t:PublishContainer -p ContainerRepository=weihanli/aspire-dashboard-base -p ContainerImageTag=${{ github.event.inputs.tag }} -p ContainerRegistry=docker.io -p ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
 
       - name: Build Dockerfile
         run: |
@@ -74,7 +73,7 @@ jobs:
           cat $OUTPUT_FILE
 
 
-      - name: Build Tag Image
+      - name: Build Tag ${{ github.event.inputs.tag }} Image
         id: docker_build_release
         uses: docker/build-push-action@v5
         if: ${{ github.event.inputs.tag != '' }}
