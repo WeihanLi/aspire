@@ -71,6 +71,7 @@ jobs:
           EOF
           
           echo "✅ File written to: $OUTPUT_FILE"
+          cat $OUTPUT_FILE
 
 
       - name: Build Tag Image
