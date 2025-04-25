@@ -11,6 +11,7 @@ using Aspire.Dashboard.Extensions;
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Model.ResourceGraph;
 using Aspire.Dashboard.Otlp.Storage;
+using Aspire.Dashboard.Telemetry;
 using Aspire.Dashboard.Utils;
 using Humanizer;
 using Microsoft.AspNetCore.Components;
@@ -21,7 +22,7 @@ using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons;
 
 namespace Aspire.Dashboard.Components.Pages;
 
-public partial class Resources : ComponentBase, IAsyncDisposable, IPageWithSessionAndUrlState<Resources.ResourcesViewModel, Resources.ResourcesPageState>
+public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncDisposable, IPageWithSessionAndUrlState<Resources.ResourcesViewModel, Resources.ResourcesPageState>
 {
     private const string TypeColumn = nameof(TypeColumn);
     private const string NameColumn = nameof(NameColumn);
@@ -52,6 +53,8 @@ public partial class Resources : ComponentBase, IAsyncDisposable, IPageWithSessi
     public required ISessionStorage SessionStorage { get; init; }
     [Inject]
     public required IOptionsMonitor<DashboardOptions> DashboardOptions { get; init; }
+    [Inject]
+    public required ComponentTelemetryContextProvider TelemetryContextProvider { get; init; }
 
     public string BasePath => DashboardUrls.ResourcesBasePath;
     public string SessionStorageKey => "Resources_PageState";
@@ -214,6 +217,7 @@ public partial class Resources : ComponentBase, IAsyncDisposable, IPageWithSessi
             }
         });
 
+        TelemetryContextProvider.Initialize(TelemetryContext);
         _isLoading = false;
 
         async Task SubscribeResourcesAsync()
@@ -322,6 +326,7 @@ public partial class Resources : ComponentBase, IAsyncDisposable, IPageWithSessi
 
             await _jsModule.InvokeVoidAsync("initializeResourcesGraph", _resourcesInteropReference);
             await UpdateResourceGraphResourcesAsync();
+            await UpdateResourceGraphSelectedAsync();
         }
     }
 
@@ -353,13 +358,13 @@ public partial class Resources : ComponentBase, IAsyncDisposable, IPageWithSessi
         }
 
         [JSInvokable]
-        public async Task ResourceContextMenu(string id, int clientX, int clientY)
+        public async Task ResourceContextMenu(string id, int screenWidth, int screenHeight, int clientX, int clientY)
         {
             if (resources._resourceByName.TryGetValue(id, out var resource))
             {
                 await resources.InvokeAsync(async () =>
                 {
-                    await resources.ShowContextMenuAsync(resource, clientX, clientY);
+                    await resources.ShowContextMenuAsync(resource, screenWidth, screenHeight, clientX, clientY);
                 });
             }
         }
@@ -491,6 +496,8 @@ public partial class Resources : ComponentBase, IAsyncDisposable, IPageWithSessi
             // Navigate to remove ?resource=xxx in the URL.
             NavigationManager.NavigateTo(DashboardUrls.ResourcesUrl(), new NavigationOptions { ReplaceHistoryEntry = true });
         }
+
+        UpdateTelemetryProperties();
     }
 
     private bool ApplicationErrorCountsChanged(Dictionary<ApplicationKey, int> newApplicationUnviewedErrorCounts)
@@ -511,7 +518,7 @@ public partial class Resources : ComponentBase, IAsyncDisposable, IPageWithSessi
         return false;
     }
 
-    private async Task ShowContextMenuAsync(ResourceViewModel resource, int clientX, int clientY)
+    private async Task ShowContextMenuAsync(ResourceViewModel resource, int screenWidth, int screenHeight, int clientX, int clientY)
     {
         // This is called when the browser requests to show the context menu for a resource.
         // The method doesn't complete until the context menu is closed so the browser can await
@@ -531,14 +538,15 @@ public partial class Resources : ComponentBase, IAsyncDisposable, IPageWithSessi
                 (buttonId) => ShowResourceDetailsAsync(resource, buttonId),
                 (command) => ExecuteResourceCommandAsync(resource, command),
                 (resource, command) => DashboardCommandExecutor.IsExecuting(resource.Name, command.Name),
-                showConsoleLogsItem: true);
+                showConsoleLogsItem: true,
+                showUrls: true);
 
             // The previous context menu should always be closed by this point but complete just in case.
             _contextMenuClosedTcs?.TrySetResult();
 
             _contextMenuClosedTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-            await contextMenu.OpenAsync(clientX, clientY);
+            await contextMenu.OpenAsync(screenWidth, screenHeight, clientX, clientY);
             StateHasChanged();
 
             // Completed when the overlay closes.
@@ -800,6 +808,7 @@ public partial class Resources : ComponentBase, IAsyncDisposable, IPageWithSessi
         _watchTaskCancellationTokenSource.Cancel();
         _watchTaskCancellationTokenSource.Dispose();
         _logsSubscription?.Dispose();
+        TelemetryContext.Dispose();
 
         await JSInteropHelpers.SafeDisposeAsync(_jsModule);
 
@@ -815,5 +824,23 @@ public partial class Resources : ComponentBase, IAsyncDisposable, IPageWithSessi
 
         _contextMenuClosedTcs?.TrySetResult();
         _contextMenuClosedTcs = null;
+    }
+
+    // IComponentWithTelemetry impl
+    public ComponentTelemetryContext TelemetryContext { get; } = new(DashboardUrls.ResourcesBasePath);
+
+    public void UpdateTelemetryProperties()
+    {
+        var properties = new List<ComponentTelemetryProperty>
+        {
+            new(TelemetryPropertyKeys.ResourceView, new AspireTelemetryProperty(PageViewModel.SelectedViewKind.ToString(), AspireTelemetryPropertyType.UserSetting))
+        };
+
+        foreach (var resourceTypeGroup in _resourceByName.Values.GroupBy(r => r.ResourceType))
+        {
+            properties.Add(new ComponentTelemetryProperty($"{TelemetryPropertyKeys.ResourceType}.{resourceTypeGroup.Key}", new AspireTelemetryProperty(resourceTypeGroup.Count(), AspireTelemetryPropertyType.Metric)));
+        }
+
+        TelemetryContext.UpdateTelemetryProperties(properties.ToArray());
     }
 }

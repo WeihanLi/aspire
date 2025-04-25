@@ -4,26 +4,55 @@
 using System.CommandLine;
 using System.Diagnostics;
 using Aspire.Cli.Backchannel;
+using Aspire.Cli.Interaction;
+using Aspire.Cli.Projects;
 using Aspire.Cli.Utils;
 using Aspire.Hosting;
 using Spectre.Console;
 
 namespace Aspire.Cli.Commands;
 
+internal interface IPublishCommandPrompter
+{
+    Task<string> PromptForPublisherAsync(IEnumerable<string> publishers, CancellationToken cancellationToken);
+}
+
+internal class PublishCommandPrompter(IInteractionService interactionService) : IPublishCommandPrompter
+{
+    public virtual async Task<string> PromptForPublisherAsync(IEnumerable<string> publishers, CancellationToken cancellationToken)
+    {
+        return await interactionService.PromptForSelectionAsync(
+            "Select a publisher:",
+            publishers,
+            p => p,
+            cancellationToken
+        );
+    }
+}
+
 internal sealed class PublishCommand : BaseCommand
 {
     private readonly ActivitySource _activitySource = new ActivitySource(nameof(PublishCommand));
     private readonly IDotNetCliRunner _runner;
+    private readonly IInteractionService _interactionService;
+    private readonly IProjectLocator _projectLocator;
+    private readonly IPublishCommandPrompter _prompter;
 
-    public PublishCommand(IDotNetCliRunner runner)
+    public PublishCommand(IDotNetCliRunner runner, IInteractionService interactionService, IProjectLocator projectLocator, IPublishCommandPrompter prompter)
         : base("publish", "Generates deployment artifacts for an Aspire app host project.")
     {
-        ArgumentNullException.ThrowIfNull(runner, nameof(runner));
+        ArgumentNullException.ThrowIfNull(runner);
+        ArgumentNullException.ThrowIfNull(interactionService);
+        ArgumentNullException.ThrowIfNull(projectLocator);
+        ArgumentNullException.ThrowIfNull(prompter);
+
         _runner = runner;
+        _interactionService = interactionService;
+        _projectLocator = projectLocator;
+        _prompter = prompter;
 
         var projectOption = new Option<FileInfo?>("--project");
         projectOption.Description = "The path to the Aspire app host project file.";
-        projectOption.Validators.Add(ProjectFileHelper.ValidateProjectOption);
         Options.Add(projectOption);
 
         var publisherOption = new Option<string>("--publisher", "-p");
@@ -38,15 +67,20 @@ internal sealed class PublishCommand : BaseCommand
 
     protected override async Task<int> ExecuteAsync(ParseResult parseResult, CancellationToken cancellationToken)
     {
+        var outputCollector = new OutputCollector();
+
         (bool IsCompatibleAppHost, bool SupportsBackchannel, string? AspireHostingSdkVersion)? appHostCompatibilityCheck = null;
 
         try
         {
             using var activity = _activitySource.StartActivity();
 
-            var passedAppHostProjectFile = parseResult.GetValue<FileInfo?>("--project");
-            var effectiveAppHostProjectFile = ProjectFileHelper.UseOrFindAppHostProjectFile(passedAppHostProjectFile);
-            
+            var effectiveAppHostProjectFile = await _interactionService.ShowStatusAsync("Locating app host project...", async () =>
+            {
+                var passedAppHostProjectFile = parseResult.GetValue<FileInfo?>("--project");
+                return await _projectLocator.UseOrFindAppHostProjectFileAsync(passedAppHostProjectFile, cancellationToken);
+            });
+
             if (effectiveAppHostProjectFile is null)
             {
                 return ExitCodeConstants.FailedToFindProject;
@@ -59,18 +93,25 @@ internal sealed class PublishCommand : BaseCommand
                 env[KnownConfigNames.WaitForDebugger] = "true";
             }
 
-            appHostCompatibilityCheck = await AppHostHelper.CheckAppHostCompatibilityAsync(_runner, effectiveAppHostProjectFile, cancellationToken);
+            appHostCompatibilityCheck = await AppHostHelper.CheckAppHostCompatibilityAsync(_runner, _interactionService, effectiveAppHostProjectFile, cancellationToken);
 
             if (!appHostCompatibilityCheck?.IsCompatibleAppHost ?? throw new InvalidOperationException("IsCompatibleAppHost is null"))
             {
-                return ExitCodeConstants.FailedToDotnetRunAppHost;
+                return ExitCodeConstants.AppHostIncompatible;
             }
 
-            var buildExitCode = await AppHostHelper.BuildAppHostAsync(_runner, effectiveAppHostProjectFile, cancellationToken);
+            var buildOptions = new DotNetCliRunnerInvocationOptions
+            {
+                StandardOutputCallback = outputCollector.AppendOutput,
+                StandardErrorCallback = outputCollector.AppendError,
+            };
+
+            var buildExitCode = await AppHostHelper.BuildAppHostAsync(_runner, _interactionService, effectiveAppHostProjectFile, buildOptions, cancellationToken);
 
             if (buildExitCode != 0)
             {
-                AnsiConsole.MarkupLine($"[red bold]:thumbs_down: The project could not be built. For more information run with --debug switch.[/]");
+                _interactionService.DisplayLines(outputCollector.GetLines());
+                _interactionService.DisplayError("The project could not be built. For more information run with --debug switch.");
                 return ExitCodeConstants.FailedToBuildArtifacts;
             }
 
@@ -78,14 +119,20 @@ internal sealed class PublishCommand : BaseCommand
             var outputPath = parseResult.GetValue<string>("--output-path");
             var fullyQualifiedOutputPath = Path.GetFullPath(outputPath ?? ".");
 
-            var publishersResult = await InteractionUtils.ShowStatusAsync<(int ExitCode, string[] Publishers)>(
+            var publishersResult = await _interactionService.ShowStatusAsync<(int ExitCode, string[] Publishers)>(
                 publisher is { } ? ":package:  Getting publisher..." : ":package:  Getting publishers...",
                 async () => {
                     using var getPublishersActivity = _activitySource.StartActivity(
                         $"{nameof(ExecuteAsync)}-Action-GetPublishers",
                         ActivityKind.Client);
 
-                    var backchannelCompletionSource = new TaskCompletionSource<AppHostBackchannel>();
+                    var getPublishersRunOptions = new DotNetCliRunnerInvocationOptions
+                    {
+                        StandardOutputCallback = outputCollector.AppendOutput,
+                        StandardErrorCallback = outputCollector.AppendError,
+                    };
+
+                    var backchannelCompletionSource = new TaskCompletionSource<IAppHostBackchannel>();
                     var pendingInspectRun = _runner.RunAsync(
                         effectiveAppHostProjectFile,
                         false,
@@ -93,6 +140,7 @@ internal sealed class PublishCommand : BaseCommand
                         ["--operation", "inspect"],
                         null,
                         backchannelCompletionSource,
+                        getPublishersRunOptions,
                         cancellationToken).ConfigureAwait(false);
 
                     var backchannel = await backchannelCompletionSource.Task.ConfigureAwait(false);
@@ -107,14 +155,15 @@ internal sealed class PublishCommand : BaseCommand
 
             if (publishersResult.ExitCode != 0)
             {
-                AnsiConsole.MarkupLine($"[red bold]:thumbs_down:  The publisher inspection failed with exit code {publishersResult.ExitCode}. For more information run with --debug switch.[/]");
+                _interactionService.DisplayLines(outputCollector.GetLines());
+                _interactionService.DisplayError($"The publisher inspection failed with exit code {publishersResult.ExitCode}. For more information run with --debug switch.");
                 return ExitCodeConstants.FailedToBuildArtifacts;
             }
 
             var publishers = publishersResult.Publishers;
             if (publishers is null || publishers.Length == 0)
             {
-                AnsiConsole.MarkupLine("[red bold]:thumbs_down:  No publishers were found.[/]");
+                _interactionService.DisplayError($"No publishers were found.");
                 return ExitCodeConstants.FailedToBuildArtifacts;
             }
 
@@ -122,21 +171,13 @@ internal sealed class PublishCommand : BaseCommand
             {
                 if (publisher is not null)
                 {
-                    AnsiConsole.MarkupLine($"[red bold]:warning:  The specified publisher '{publisher}' was not found.[/]");
+                    _interactionService.DisplayMessage("warning", $"[yellow bold]The specified publisher '{publisher}' was not found.[/]");
                 }
 
-                var publisherPrompt = new SelectionPrompt<string>()
-                    .Title("Select a publisher:")
-                    .UseConverter(p => p)
-                    .PageSize(10)
-                    .EnableSearch()
-                    .HighlightStyle(Style.Parse("darkmagenta"))
-                    .AddChoices(publishers!);
-
-                publisher = await AnsiConsole.PromptAsync(publisherPrompt, cancellationToken);
+                publisher = await _prompter.PromptForPublisherAsync(publishers!, cancellationToken);
             }
 
-            AnsiConsole.MarkupLine($":hammer_and_wrench:  Generating artifacts for '{publisher}' publisher...");
+            _interactionService.DisplayMessage($"hammer_and_wrench", $"Generating artifacts for '{publisher}' publisher...");
 
             var exitCode = await AnsiConsole.Progress()
                 .AutoRefresh(true)
@@ -150,11 +191,17 @@ internal sealed class PublishCommand : BaseCommand
                         $"{nameof(ExecuteAsync)}-Action-GenerateArtifacts",
                         ActivityKind.Internal);
                     
-                    var backchannelCompletionSource = new TaskCompletionSource<AppHostBackchannel>();
+                    var backchannelCompletionSource = new TaskCompletionSource<IAppHostBackchannel>();
 
                     var launchingAppHostTask = context.AddTask(":play_button:  Launching apphost");
                     launchingAppHostTask.IsIndeterminate();
                     launchingAppHostTask.StartTask();
+
+                    var publishRunOptions = new DotNetCliRunnerInvocationOptions
+                    {
+                        StandardOutputCallback = outputCollector.AppendOutput,
+                        StandardErrorCallback = outputCollector.AppendError,
+                    };
 
                     var pendingRun = _runner.RunAsync(
                         effectiveAppHostProjectFile,
@@ -163,6 +210,7 @@ internal sealed class PublishCommand : BaseCommand
                         ["--publisher", publisher ?? "manifest", "--output-path", fullyQualifiedOutputPath],
                         env,
                         backchannelCompletionSource,
+                        publishRunOptions,
                         cancellationToken);
 
                     var backchannel = await backchannelCompletionSource.Task.ConfigureAwait(false);
@@ -238,21 +286,42 @@ internal sealed class PublishCommand : BaseCommand
 
             if (exitCode != 0)
             {
-                AnsiConsole.MarkupLine($"[red bold]:thumbs_down: Publishing artifacts failed with exit code {exitCode}. For more information run with --debug switch.[/]");
+                _interactionService.DisplayLines(outputCollector.GetLines());
+                _interactionService.DisplayError($"Publishing artifacts failed with exit code {exitCode}. For more information run with --debug switch.");
                 return ExitCodeConstants.FailedToBuildArtifacts;
             }
             else
             {
-                AnsiConsole.MarkupLine($"[green bold]:thumbs_up: Successfully published artifacts to: {fullyQualifiedOutputPath}[/]");
+                _interactionService.DisplaySuccess($"Successfully published artifacts to: {fullyQualifiedOutputPath}");
                 return ExitCodeConstants.Success;
             }
         }
+        catch (ProjectLocatorException ex) when (ex.Message == "Project file does not exist.")
+        {
+            _interactionService.DisplayError("The --project option specified a project that does not exist.");
+            return ExitCodeConstants.FailedToFindProject;
+        }
+        catch (ProjectLocatorException ex) when (ex.Message.Contains("Multiple project files found."))
+        {
+            _interactionService.DisplayError("The --project option was not specified and multiple app host project files were detected.");
+            return ExitCodeConstants.FailedToFindProject;
+        }
+        catch (ProjectLocatorException ex) when (ex.Message.Contains("No project file"))
+        {
+            _interactionService.DisplayError("The project argument was not specified and no *.csproj files were detected.");
+            return ExitCodeConstants.FailedToFindProject;
+        }
         catch (AppHostIncompatibleException ex)
         {
-            return InteractionUtils.DisplayIncompatibleVersionError(
+            return _interactionService.DisplayIncompatibleVersionError(
                 ex,
                 appHostCompatibilityCheck?.AspireHostingSdkVersion ?? throw new InvalidOperationException("AspireHostingSdkVersion is null")
                 );
+        }
+        catch (Exception ex)
+        {
+            _interactionService.DisplayError($"An unexpected error occurred: {ex.Message}");
+            return ExitCodeConstants.FailedToBuildArtifacts;
         }
     }
 }

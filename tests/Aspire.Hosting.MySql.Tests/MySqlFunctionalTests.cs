@@ -378,7 +378,6 @@ public class MySqlFunctionalTests(ITestOutputHelper testOutputHelper)
 
     [Fact]
     [RequiresDocker]
-    [QuarantinedTest("https://github.com/dotnet/aspire/issues/7340")]
     public async Task VerifyEfMySql()
     {
         using var cts = new CancellationTokenSource(TestConstants.ExtraLongTimeoutTimeSpan * 2);
@@ -477,7 +476,7 @@ public class MySqlFunctionalTests(ITestOutputHelper testOutputHelper)
 
         async Task<string?[]> RunContainersAsync()
         {
-            using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper)
+            using var builder = TestDistributedApplicationBuilder.CreateWithTestContainerRegistry(testOutputHelper)
                 .WithTempAspireStore(aspireStorePath)
                 .WithResourceCleanUp(false);
 
