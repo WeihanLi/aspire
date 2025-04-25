@@ -82,7 +82,7 @@ jobs:
           context: ./
           file: ./Dockerfile
           push: true
-          tags: weihanli/dotnet-exec:${{ github.event.inputs.tag }}
+          tags: weihanli/aspire-dashboard:${{ github.event.inputs.tag }}
           platforms: "linux/amd64,linux/arm64"
 
       - name: Build Latest Image
