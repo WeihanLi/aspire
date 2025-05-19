@@ -646,6 +646,15 @@ namespace Aspire.Dashboard.Resources {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to Capture paused.
+        /// </summary>
+        public static string PauseWarningTitle {
+            get {
+                return ResourceManager.GetString("PauseWarningTitle", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to Count.
         /// </summary>
         public static string PlotlyChartCount {
@@ -1069,11 +1078,11 @@ namespace Aspire.Dashboard.Resources {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to Capture paused.
+        ///   Looks up a localized string similar to Toggle nesting.
         /// </summary>
-        public static string TotalItemsFooterCapturePaused {
+        public static string ToggleNesting {
             get {
-                return ResourceManager.GetString("TotalItemsFooterCapturePaused", resourceCulture);
+                return ResourceManager.GetString("ToggleNesting", resourceCulture);
             }
         }
         

@@ -32,9 +32,11 @@ internal sealed class DotNetCliRunnerInvocationOptions
 {
     public Action<string>? StandardOutputCallback { get; set; }
     public Action<string>? StandardErrorCallback { get; set; }
+
+    public bool NoLaunchProfile { get; set; }
 }
 
-internal sealed class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider serviceProvider) : IDotNetCliRunner
+internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider serviceProvider) : IDotNetCliRunner
 {
     private readonly ActivitySource _activitySource = new ActivitySource(nameof(DotNetCliRunner));
 
@@ -165,7 +167,10 @@ internal sealed class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceP
 
         var watchOrRunCommand = watch ? "watch" : "run";
         var noBuildSwitch = noBuild ? "--no-build" : string.Empty;
-        string[] cliArgs = [watchOrRunCommand, noBuildSwitch, "--project", projectFile.FullName, "--", ..args];
+        var noProfileSwitch = options.NoLaunchProfile ? "--no-launch-profile" : string.Empty;
+
+        string[] cliArgs = [watchOrRunCommand, noBuildSwitch, noProfileSwitch, "--project", projectFile.FullName, "--", ..args];
+
         return await ExecuteAsync(
             args: cliArgs,
             env: env,
@@ -343,7 +348,7 @@ internal sealed class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceP
         return socketPath;
     }
 
-    public async Task<int> ExecuteAsync(string[] args, IDictionary<string, string>? env, DirectoryInfo workingDirectory, TaskCompletionSource<IAppHostBackchannel>? backchannelCompletionSource, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
+    public virtual async Task<int> ExecuteAsync(string[] args, IDictionary<string, string>? env, DirectoryInfo workingDirectory, TaskCompletionSource<IAppHostBackchannel>? backchannelCompletionSource, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
     {
         using var activity = _activitySource.StartActivity();
 
@@ -451,7 +456,7 @@ internal sealed class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceP
             while (!cancellationToken.IsCancellationRequested && !reader.EndOfStream)
             {
                 var line = await reader.ReadLineAsync(cancellationToken);
-                logger.LogTrace(
+                logger.LogDebug(
                     "dotnet({ProcessId}) {Identifier}: {Line}",
                     process.Id,
                     identifier,
@@ -488,7 +493,7 @@ internal sealed class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceP
             catch (SocketException ex) when (process.HasExited && process.ExitCode != 0)
             {
                 logger.LogError(ex, "AppHost process has exited. Unable to connect to backchannel at {SocketPath}", socketPath);
-                var backchannelException = new InvalidOperationException($"AppHost process has exited unexpectedly. Use --debug to see more details.");
+                var backchannelException = new FailedToConnectBackchannelConnection($"AppHost process has exited unexpectedly. Use --debug to see more details.", process, ex);
                 backchannelCompletionSource.SetException(backchannelException);
                 return;
             }
@@ -654,33 +659,41 @@ internal sealed class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceP
             }
 
             var foundPackages = new List<NuGetPackage>();
-            var document = JsonDocument.Parse(stdout);
-
-            var searchResultsArray = document.RootElement.GetProperty("searchResult");
-
-            foreach (var sourceResult in searchResultsArray.EnumerateArray())
+            try
             {
-                var source = sourceResult.GetProperty("sourceName").GetString();
-                var sourcePackagesArray = sourceResult.GetProperty("packages");
+                using var document = JsonDocument.Parse(stdout);
 
-                foreach (var packageResult in sourcePackagesArray.EnumerateArray())
+                var searchResultsArray = document.RootElement.GetProperty("searchResult");
+
+                foreach (var sourceResult in searchResultsArray.EnumerateArray())
                 {
-                    var id = packageResult.GetProperty("id").GetString();
+                    var source = sourceResult.GetProperty("sourceName").GetString();
+                    var sourcePackagesArray = sourceResult.GetProperty("packages");
 
-                    // var version = prerelease switch {
-                    //     true => packageResult.GetProperty("version").GetString(),
-                    //     false => packageResult.GetProperty("latestVersion").GetString()
-                    // };
-
-                    var version = packageResult.GetProperty("latestVersion").GetString();
-
-                    foundPackages.Add(new NuGetPackage
+                    foreach (var packageResult in sourcePackagesArray.EnumerateArray())
                     {
-                        Id = id!,
-                        Version = version!,
-                        Source = source!
-                    });
+                        var id = packageResult.GetProperty("id").GetString();
+
+                        // var version = prerelease switch {
+                        //     true => packageResult.GetProperty("version").GetString(),
+                        //     false => packageResult.GetProperty("latestVersion").GetString()
+                        // };
+
+                        var version = packageResult.GetProperty("latestVersion").GetString();
+
+                        foundPackages.Add(new NuGetPackage
+                        {
+                            Id = id!,
+                            Version = version!,
+                            Source = source!
+                        });
+                    }
                 }
+            }
+            catch (JsonException ex)
+            {
+                logger.LogError($"Failed to read JSON returned by the package search. {ex.Message}");
+                return (ExitCodeConstants.FailedToAddPackage, null);
             }
 
             return (result, foundPackages.ToArray());

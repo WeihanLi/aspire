@@ -3,6 +3,7 @@
 
 #pragma warning disable ASPIREPUBLISHERS001
 
+using System.Globalization;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Docker.Resources;
 using Aspire.Hosting.Docker.Resources.ComposeNodes;
@@ -22,15 +23,20 @@ namespace Aspire.Hosting.Docker;
 /// </remarks>
 internal sealed class DockerComposePublishingContext(
     DistributedApplicationExecutionContext executionContext,
-    DockerComposePublisherOptions publisherOptions,
     IResourceContainerImageBuilder imageBuilder,
+    string outputPath,
     ILogger logger,
     CancellationToken cancellationToken = default)
 {
-    public readonly IResourceContainerImageBuilder ImageBuilder = imageBuilder;
-    public readonly DockerComposePublisherOptions PublisherOptions = publisherOptions;
+    private const UnixFileMode DefaultUmask = UnixFileMode.GroupExecute | UnixFileMode.GroupWrite | UnixFileMode.OtherExecute | UnixFileMode.OtherWrite;
+    private const UnixFileMode MaxDefaultFilePermissions = UnixFileMode.UserRead | UnixFileMode.UserWrite |
+        UnixFileMode.GroupRead | UnixFileMode.GroupWrite |
+        UnixFileMode.OtherRead | UnixFileMode.OtherWrite;
 
-    internal async Task WriteModelAsync(DistributedApplicationModel model)
+    public readonly IResourceContainerImageBuilder ImageBuilder = imageBuilder;
+    public readonly string OutputPath = outputPath;
+
+    internal async Task WriteModelAsync(DistributedApplicationModel model, DockerComposeEnvironmentResource environment)
     {
         if (!executionContext.IsPublishMode)
         {
@@ -41,7 +47,7 @@ internal sealed class DockerComposePublishingContext(
         logger.StartGeneratingDockerCompose();
 
         ArgumentNullException.ThrowIfNull(model);
-        ArgumentNullException.ThrowIfNull(PublisherOptions.OutputPath);
+        ArgumentNullException.ThrowIfNull(OutputPath);
 
         if (model.Resources.Count == 0)
         {
@@ -49,28 +55,13 @@ internal sealed class DockerComposePublishingContext(
             return;
         }
 
-        await WriteDockerComposeOutputAsync(model).ConfigureAwait(false);
+        await WriteDockerComposeOutputAsync(model, environment).ConfigureAwait(false);
 
-        logger.FinishGeneratingDockerCompose(PublisherOptions.OutputPath);
+        logger.FinishGeneratingDockerCompose(OutputPath);
     }
 
-    private async Task WriteDockerComposeOutputAsync(DistributedApplicationModel model)
+    private async Task WriteDockerComposeOutputAsync(DistributedApplicationModel model, DockerComposeEnvironmentResource environment)
     {
-        var dockerComposeEnvironments = model.Resources.OfType<DockerComposeEnvironmentResource>().ToArray();
-
-        if (dockerComposeEnvironments.Length > 1)
-        {
-            throw new NotSupportedException("Multiple Docker Compose environments are not supported.");
-        }
-
-        var environment = dockerComposeEnvironments.FirstOrDefault();
-
-        if (environment == null)
-        {
-            // No Docker Compose environment found
-            throw new InvalidOperationException($"No Docker Compose environment found. Ensure a Docker Compose environment is registered by calling {nameof(DockerComposeEnvironmentExtensions.AddDockerComposeEnvironment)}.");
-        }
-
         var defaultNetwork = new Network
         {
             Name = environment.DefaultNetworkName ?? "aspire",
@@ -82,14 +73,14 @@ internal sealed class DockerComposePublishingContext(
 
         foreach (var resource in model.Resources)
         {
-            if (resource.GetDeploymentTargetAnnotation()?.DeploymentTarget is DockerComposeServiceResource serviceResource)
+            if (resource.GetDeploymentTargetAnnotation(environment)?.DeploymentTarget is DockerComposeServiceResource serviceResource)
             {
-                if (PublisherOptions.BuildImages)
+                if (environment.BuildContainerImages)
                 {
                     await ImageBuilder.BuildImageAsync(serviceResource.TargetResource, cancellationToken).ConfigureAwait(false);
                 }
 
-                var composeService = serviceResource.ComposeService;
+                var composeService = serviceResource.BuildComposeService();
 
                 HandleComposeFileVolumes(serviceResource, composeFile);
 
@@ -97,6 +88,18 @@ internal sealed class DockerComposePublishingContext(
                 [
                     defaultNetwork.Name,
                 ];
+
+                if (serviceResource.TargetResource.TryGetAnnotationsOfType<ContainerFileSystemCallbackAnnotation>(out var fsAnnotations))
+                {
+                    foreach (var a in fsAnnotations)
+                    {
+                        var files = await a.Callback(new() { Model = serviceResource.TargetResource, ServiceProvider = executionContext.ServiceProvider }, CancellationToken.None).ConfigureAwait(false);
+                        foreach (var file in files)
+                        {
+                            HandleComposeFileConfig(composeFile, composeService, file, a.DefaultOwner, a.DefaultGroup, a.Umask ?? DefaultUmask, a.DestinationPath);
+                        }
+                    }
+                }
 
                 if (serviceResource.TargetResource.TryGetAnnotationsOfType<DockerComposeServiceCustomizationAnnotation>(out var annotations))
                 {
@@ -114,8 +117,8 @@ internal sealed class DockerComposePublishingContext(
         environment.ConfigureComposeFile?.Invoke(composeFile);
 
         var composeOutput = composeFile.ToYaml();
-        var outputFile = Path.Combine(PublisherOptions.OutputPath!, "docker-compose.yaml");
-        Directory.CreateDirectory(PublisherOptions.OutputPath!);
+        var outputFile = Path.Combine(OutputPath, "docker-compose.yaml");
+        Directory.CreateDirectory(OutputPath);
         await File.WriteAllTextAsync(outputFile, composeOutput, cancellationToken).ConfigureAwait(false);
 
         if (environment.CapturedEnvironmentVariables.Count == 0)
@@ -126,28 +129,74 @@ internal sealed class DockerComposePublishingContext(
 
         // Write a .env file with the environment variable names
         // that are used in the compose file
-        var envFile = Path.Combine(PublisherOptions.OutputPath!, ".env");
-        using var envWriter = new StreamWriter(envFile);
+        var envFilePath = Path.Combine(OutputPath, ".env");
+        var envFile = EnvFile.Load(envFilePath);
 
         foreach (var entry in environment.CapturedEnvironmentVariables ?? [])
         {
-            var (key, (description, defaultValue)) = entry;
-
-            await envWriter.WriteLineAsync($"# {description}").ConfigureAwait(false);
-
-            if (defaultValue is not null)
-            {
-                await envWriter.WriteLineAsync($"{key}={defaultValue}").ConfigureAwait(false);
-            }
-            else
-            {
-                await envWriter.WriteLineAsync($"{key}=").ConfigureAwait(false);
-            }
-
-            await envWriter.WriteLineAsync().ConfigureAwait(false);
+            var (key, (description, defaultValue, _)) = entry;
+            envFile.AddIfMissing(key, defaultValue, description);
         }
 
-        await envWriter.FlushAsync().ConfigureAwait(false);
+        envFile.Save(envFilePath);
+    }
+
+    private void HandleComposeFileConfig(ComposeFile composeFile, Service composeService, ContainerFileSystemItem? item, int? uid, int? gid, UnixFileMode umask, string path)
+    {
+        if (item is ContainerDirectory dir)
+        {
+            foreach (var dirItem in dir.Entries)
+            {
+                HandleComposeFileConfig(composeFile, composeService, dirItem, item.Owner ?? uid, item.Group ?? gid, umask, path += "/" + item.Name);
+            }
+
+            return;
+        }
+
+        if (item is ContainerFile file)
+        {
+            var name = composeService.Name + "_" + path.Replace('/', '_') + "_" + file.Name;
+
+            // If there is a source path, we should copy the file to the output path and use that instead.
+            string? sourcePath = null;
+            if (!string.IsNullOrEmpty(file.SourcePath))
+            {
+                try
+                {
+                    // Determine the path to copy the file to
+                    sourcePath = Path.Combine(OutputPath, composeService.Name, Path.GetFileName(file.SourcePath));
+                    // Files will be copied to a subdirectory named after the service
+                    Directory.CreateDirectory(Path.Combine(OutputPath, composeService.Name));
+                    File.Copy(file.SourcePath, sourcePath);
+                    // Use a relative path for the compose file to make it portable
+                    // Use unix style path separators even on Windows
+                    sourcePath = Path.GetRelativePath(OutputPath, sourcePath).Replace('\\', '/');
+                }
+                catch
+                {
+                    logger.FailedToCopyFile(file.SourcePath, OutputPath);
+                    throw;
+                }
+            }
+
+            composeFile.AddConfig(new()
+            {
+                Name = name,
+                File = sourcePath,
+                Content = file.Contents,
+            });
+
+            composeService.AddConfig(new()
+            {
+                Source = name,
+                Target = path + "/" + file.Name,
+                Uid = (item.Owner ?? uid)?.ToString(CultureInfo.InvariantCulture),
+                Gid = (item.Group ?? gid)?.ToString(CultureInfo.InvariantCulture),
+                Mode = item.Mode != 0 ? item.Mode : MaxDefaultFilePermissions & ~umask,
+            });
+
+            return;
+        }
     }
 
     private static void HandleComposeFileVolumes(DockerComposeServiceResource serviceResource, ComposeFile composeFile)

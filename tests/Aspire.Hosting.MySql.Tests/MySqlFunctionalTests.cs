@@ -320,7 +320,9 @@ public class MySqlFunctionalTests(ITestOutputHelper testOutputHelper)
             var mysql = builder.AddMySql("mysql").WithEnvironment("MYSQL_DATABASE", mySqlDbName);
             var db = mysql.AddDatabase(mySqlDbName);
 
+#pragma warning disable CS0618 // Type or member is obsolete
             mysql.WithInitBindMount(bindMountPath);
+#pragma warning restore CS0618 // Type or member is obsolete
 
             using var app = builder.Build();
 
@@ -368,6 +370,91 @@ public class MySqlFunctionalTests(ITestOutputHelper testOutputHelper)
             try
             {
                 Directory.Delete(bindMountPath);
+            }
+            catch
+            {
+                // Don't fail test if we can't clean the temporary folder
+            }
+        }
+    }
+
+    [Fact]
+    [RequiresDocker]
+    public async Task VerifyWithInitFiles()
+    {
+        // Creates a script that should be executed when the container is initialized.
+
+        using var cts = new CancellationTokenSource(TestConstants.ExtraLongTimeoutTimeSpan * 2);
+        var pipeline = new ResiliencePipelineBuilder()
+            .AddRetry(new() { MaxRetryAttempts = 10, BackoffType = DelayBackoffType.Linear, Delay = TimeSpan.FromSeconds(2), ShouldHandle = new PredicateBuilder().Handle<MySqlException>() })
+            .Build();
+
+        var initFilesPath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+
+        Directory.CreateDirectory(initFilesPath);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(initFilesPath, "init.sql"), """
+                CREATE TABLE cars (brand VARCHAR(255));
+                INSERT INTO cars (brand) VALUES ('BatMobile');
+            """);
+
+            using var builder = TestDistributedApplicationBuilder.CreateWithTestContainerRegistry(testOutputHelper);
+
+            var mySqlDbName = "db1";
+
+            var mysql = builder.AddMySql("mysql").WithEnvironment("MYSQL_DATABASE", mySqlDbName);
+            var db = mysql.AddDatabase(mySqlDbName);
+
+            mysql.WithInitFiles(initFilesPath);
+
+            using var app = builder.Build();
+
+            await app.StartAsync(cts.Token);
+
+            await app.WaitForTextAsync(s_mySqlReadyText, cts.Token).WaitAsync(cts.Token);
+
+            var hb = Host.CreateApplicationBuilder();
+
+            hb.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"ConnectionStrings:{db.Resource.Name}"] = await db.Resource.ConnectionStringExpression.GetValueAsync(cts.Token)
+            });
+
+            hb.AddMySqlDataSource(db.Resource.Name);
+
+            using var host = hb.Build();
+
+            await host.StartAsync(cts.Token);
+
+            // Wait until the database is available
+            await pipeline.ExecuteAsync(async token =>
+            {
+                using var connection = host.Services.GetRequiredService<MySqlConnection>();
+                await connection.OpenAsync(token);
+                Assert.Equal(ConnectionState.Open, connection.State);
+            }, cts.Token);
+
+            await pipeline.ExecuteAsync(async token =>
+            {
+                using var connection = host.Services.GetRequiredService<MySqlConnection>();
+                await connection.OpenAsync(token);
+
+                var command = connection.CreateCommand();
+                command.CommandText = $"SELECT * FROM cars;";
+
+                var results = await command.ExecuteReaderAsync(token);
+                Assert.True(await results.ReadAsync(token));
+                Assert.Equal("BatMobile", results.GetString("brand"));
+                Assert.False(await results.ReadAsync(token));
+            }, cts.Token);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(initFilesPath);
             }
             catch
             {
@@ -456,7 +543,7 @@ public class MySqlFunctionalTests(ITestOutputHelper testOutputHelper)
         using var cts = new CancellationTokenSource(TestConstants.ExtraLongTimeoutTimeSpan * 2);
 
         // Use the same path for both runs
-        var aspireStorePath = Directory.CreateTempSubdirectory().FullName;
+        using var aspireStore = new TempDirectory();
 
         var before = await RunContainersAsync();
         var after = await RunContainersAsync();
@@ -465,19 +552,10 @@ public class MySqlFunctionalTests(ITestOutputHelper testOutputHelper)
         Assert.All(after, Assert.NotNull);
         Assert.Equal(before, after);
 
-        try
-        {
-            Directory.Delete(aspireStorePath, true);
-        }
-        catch
-        {
-            // Don't fail test if we can't clean the temporary folder
-        }
-
         async Task<string?[]> RunContainersAsync()
         {
             using var builder = TestDistributedApplicationBuilder.CreateWithTestContainerRegistry(testOutputHelper)
-                .WithTempAspireStore(aspireStorePath)
+                .WithTempAspireStore(aspireStore.Path)
                 .WithResourceCleanUp(false);
 
             var passwordParameter = builder.AddParameter("pwd", "p@ssw0rd1", secret: true);
@@ -508,7 +586,7 @@ public class MySqlFunctionalTests(ITestOutputHelper testOutputHelper)
                 mySqlId2 = GetContainerId(resourceEvent);
             }
 
-            resourceEvent = await rns.WaitForResourceHealthyAsync("resource-phpmyadmin", cts.Token);
+            resourceEvent = await rns.WaitForResourceHealthyAsync("phpmyadmin", cts.Token);
             var phpMyAdminId = GetContainerId(resourceEvent);
 
             await app.StopAsync(cts.Token).WaitAsync(cts.Token);
@@ -520,5 +598,242 @@ public class MySqlFunctionalTests(ITestOutputHelper testOutputHelper)
         {
             return resourceEvent.Snapshot.Properties.FirstOrDefault(x => x.Name == "container.id")?.Value?.ToString();
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [RequiresDocker]
+    public async Task AddDatabaseCreatesNewDatabaseWithCustomScript(bool addEnvVar)
+    {
+        var mySqlDbName = "my-test-db";
+
+        var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        var pipeline = new ResiliencePipelineBuilder()
+            .AddRetry(new() { MaxRetryAttempts = 10, BackoffType = DelayBackoffType.Linear, Delay = TimeSpan.FromSeconds(2) })
+            .Build();
+
+        using var builder = TestDistributedApplicationBuilder.Create(o => { }, testOutputHelper);
+
+        var mysql = builder.AddMySql("mysql");
+
+        if (addEnvVar)
+        {
+            mysql = mysql.WithEnvironment("MYSQL_DATABASE", mySqlDbName);
+        }
+
+        // Create a database with Accent Insensitive collation
+        var newDb = mysql.AddDatabase(mySqlDbName)
+            .WithCreationScript($"""
+                CREATE DATABASE IF NOT EXISTS `{mySqlDbName}`;
+
+                USE `{mySqlDbName}`;
+
+                CREATE TABLE IF NOT EXISTS example_table (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL
+                );
+
+                INSERT INTO example_table (name) VALUES ('Example Name 1');
+                """);
+
+        using var app = builder.Build();
+
+        await app.StartAsync(cts.Token);
+
+        var hb = Host.CreateApplicationBuilder();
+
+        hb.Configuration[$"ConnectionStrings:{newDb.Resource.Name}"] = await newDb.Resource.ConnectionStringExpression.GetValueAsync(default);
+
+        hb.AddMySqlDataSource(newDb.Resource.Name);
+
+        using var host = hb.Build();
+
+        await host.StartAsync();
+
+        await app.ResourceNotifications.WaitForResourceHealthyAsync(newDb.Resource.Name, cts.Token);
+
+        // Test SqlConnection
+        await pipeline.ExecuteAsync(async token =>
+        {
+            var conn = host.Services.GetRequiredService<MySqlConnection>();
+
+            if (conn.State != System.Data.ConnectionState.Open)
+            {
+                await conn.OpenAsync(token);
+            }
+
+            var selectCommand = conn.CreateCommand();
+            selectCommand.CommandText = $"SELECT * FROM `example_table`";
+
+            var results = await selectCommand.ExecuteReaderAsync(token);
+            Assert.True(results.HasRows);
+        }, cts.Token);
+    }
+
+    [Fact]
+    [RequiresDocker]
+    public async Task AddDatabaseCreatesDatabaseResiliently()
+    {
+        // Creating the database multiple times should not fail
+
+        const string databaseName = "db1";
+        const string resourceName = "db";
+
+        string? volumeName = null;
+
+        var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        var pipeline = new ResiliencePipelineBuilder()
+            .AddRetry(new() { MaxRetryAttempts = 3, BackoffType = DelayBackoffType.Linear, Delay = TimeSpan.FromSeconds(2) })
+            .Build();
+
+        var password = "p@ssw0rd1";
+
+        try
+        {
+            for (var i = 0; i < 2; i++)
+            {
+                using var builder = TestDistributedApplicationBuilder.Create(o => { }, testOutputHelper);
+
+                var passwordParameter = builder.AddParameter("pwd", password, secret: true);
+
+                var mysql = builder.AddMySql("db1", passwordParameter);
+
+                // Use a deterministic volume name to prevent them from exhausting the machines if deletion fails
+                volumeName = VolumeNameGenerator.Generate(mysql, nameof(AddDatabaseCreatesDatabaseResiliently));
+
+                if (i == 0)
+                {
+                    // If the volume already exists (because of a crashing previous run), delete it
+                    DockerUtils.AttemptDeleteDockerVolume(volumeName);
+                }
+
+                mysql.WithDataVolume(volumeName);
+
+                var newDb = mysql.AddDatabase(resourceName, databaseName);
+
+                using var app = builder.Build();
+
+                await app.StartAsync(cts.Token);
+
+                var hb = Host.CreateApplicationBuilder();
+
+                hb.Configuration[$"ConnectionStrings:{newDb.Resource.Name}"] = await newDb.Resource.ConnectionStringExpression.GetValueAsync(default);
+
+                hb.AddMySqlDataSource(newDb.Resource.Name);
+
+                using var host = hb.Build();
+
+                await host.StartAsync();
+
+                await app.ResourceNotifications.WaitForResourceHealthyAsync(mysql.Resource.Name, cts.Token);
+
+                // Test connection
+                await pipeline.ExecuteAsync(async token =>
+                {
+                    var conn = host.Services.GetRequiredService<MySqlConnection>();
+
+                    if (conn.State != ConnectionState.Open)
+                    {
+                        await conn.OpenAsync(token);
+                    }
+
+                    Assert.Equal(ConnectionState.Open, conn.State);
+                }, cts.Token);
+
+                await app.StopAsync(cts.Token);
+            }
+        }
+        finally
+        {
+            if (volumeName is not null)
+            {
+                DockerUtils.AttemptDeleteDockerVolume(volumeName);
+            }
+        }
+    }
+
+    [Fact]
+    [RequiresDocker]
+    public async Task AddDatabaseCreatesMultipleDatabases()
+    {
+        var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+
+        using var builder = TestDistributedApplicationBuilder.Create(o => { }, testOutputHelper);
+
+        var mysql = builder.AddMySql("mysql");
+
+        var db1 = mysql.AddDatabase("db1");
+        var db2 = mysql.AddDatabase("db2");
+        var db3 = mysql.AddDatabase("db3");
+
+        var dbs = new[] { db1, db2, db3 };
+
+        using var app = builder.Build();
+
+        await app.StartAsync(cts.Token);
+
+        var hb = Host.CreateApplicationBuilder();
+
+        foreach (var db in dbs)
+        {
+            hb.Configuration[$"ConnectionStrings:{db.Resource.Name}"] = await db.Resource.ConnectionStringExpression.GetValueAsync(default);
+            hb.AddKeyedMySqlDataSource(db.Resource.Name);
+        }
+
+        using var host = hb.Build();
+
+        await host.StartAsync();
+
+        foreach (var db in dbs)
+        {
+            await app.ResourceNotifications.WaitForResourceHealthyAsync(db.Resource.Name, cts.Token);
+
+            var conn = host.Services.GetRequiredKeyedService<MySqlConnection>(db.Resource.Name);
+
+            if (conn.State != ConnectionState.Open)
+            {
+                await conn.OpenAsync(cts.Token);
+            }
+
+            Assert.Equal(ConnectionState.Open, conn.State);
+        }
+    }
+
+    [Fact]
+    [RequiresDocker]
+    public async Task AddDatabaseCreatesDatabaseWithSpecialNames()
+    {
+        const string databaseName = "!']`'[\"";
+        const string resourceName = "db";
+
+        var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+
+        using var builder = TestDistributedApplicationBuilder.CreateWithTestContainerRegistry(testOutputHelper);
+
+        var mysql = builder.AddMySql("mysql");
+        var newDb = mysql.AddDatabase(resourceName, databaseName);
+
+        using var app = builder.Build();
+
+        await app.StartAsync(cts.Token);
+
+        var hb = Host.CreateApplicationBuilder();
+        hb.Configuration[$"ConnectionStrings:{newDb.Resource.Name}"] = await newDb.Resource.ConnectionStringExpression.GetValueAsync(default);
+        hb.AddMySqlDataSource(newDb.Resource.Name);
+
+        using var host = hb.Build();
+        await host.StartAsync();
+
+        await app.ResourceNotifications.WaitForResourceHealthyAsync(newDb.Resource.Name, cts.Token);
+
+        var conn = host.Services.GetRequiredService<MySqlConnection>();
+
+        if (conn.State != ConnectionState.Open)
+        {
+            await conn.OpenAsync(cts.Token);
+        }
+
+        Assert.Equal(ConnectionState.Open, conn.State);
     }
 }

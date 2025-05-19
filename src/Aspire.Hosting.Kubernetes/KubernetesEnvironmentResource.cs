@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 #pragma warning disable ASPIRECOMPUTE001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
+#pragma warning disable ASPIREPUBLISHERS001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
 
 using Aspire.Hosting.ApplicationModel;
 
@@ -13,8 +14,7 @@ namespace Aspire.Hosting.Kubernetes;
 /// <remarks>
 /// Initializes a new instance of the <see cref="KubernetesEnvironmentResource"/> class.
 /// </remarks>
-/// <param name="name">The name of the Kubernetes environment.</param>
-public sealed class KubernetesEnvironmentResource(string name) : Resource(name), IComputeEnvironmentResource
+public sealed class KubernetesEnvironmentResource : Resource, IComputeEnvironmentResource
 {
     /// <summary>
     /// Gets or sets the name of the Helm chart to be generated.
@@ -78,4 +78,20 @@ public sealed class KubernetesEnvironmentResource(string name) : Resource(name),
     /// (e.g., ClusterIP, NodePort, LoadBalancer) created in Kubernetes for the application.
     /// </remarks>
     public string DefaultServiceType { get; set; } = "ClusterIP";
+
+    /// <param name="name">The name of the Kubernetes environment.</param>
+    public KubernetesEnvironmentResource(string name) : base(name)
+    {
+        Annotations.Add(new PublishingCallbackAnnotation(PublishAsync));
+    }
+
+    private Task PublishAsync(PublishingContext context)
+    {
+        var kubernetesContext = new KubernetesPublishingContext(
+            context.ExecutionContext,
+            context.OutputPath,
+            context.Logger,
+            context.CancellationToken);
+        return kubernetesContext.WriteModelAsync(context.Model, this);
+    }
 }

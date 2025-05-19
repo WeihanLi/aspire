@@ -65,7 +65,7 @@ public static class AzureCosmosExtensions
     /// <remarks>
     /// This version of the package defaults to the <inheritdoc cref="CosmosDBEmulatorContainerImageTags.TagVNextPreview"/> tag of the <inheritdoc cref="CosmosDBEmulatorContainerImageTags.Registry"/>/<inheritdoc cref="CosmosDBEmulatorContainerImageTags.Image"/> container image.
     /// </remarks>
-    [Experimental("ASPIRECOSMOSDB001", UrlFormat = "https://aka.ms/dotnet/aspire/diagnostics#{0}")]
+    [Experimental("ASPIRECOSMOSDB001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
     public static IResourceBuilder<AzureCosmosDBResource> RunAsPreviewEmulator(this IResourceBuilder<AzureCosmosDBResource> builder, Action<IResourceBuilder<AzureCosmosDBEmulatorResource>>? configureContainer = null)
         => RunAsEmulator(builder, configureContainer, useVNextPreview: true);
 
@@ -121,7 +121,6 @@ public static class AzureCosmosExtensions
             }
         });
 
-        // Use custom health check that also seeds the databases and containers
         var healthCheckKey = $"{builder.Resource.Name}_check";
         builder.ApplicationBuilder.Services.AddHealthChecks().AddAzureCosmosDB(
             sp => cosmosClient ?? throw new InvalidOperationException("CosmosClient is not initialized."),
@@ -200,7 +199,7 @@ public static class AzureCosmosExtensions
     /// <param name="count">Desired partition count.</param>
     /// <returns>Cosmos emulator resource builder.</returns>
     /// <remarks>Not calling this method will result in the default of 10 partitions. The actual started partitions is always one more than specified.
-    /// See <a href="https://learn.microsoft.com/en-us/azure/cosmos-db/emulator-windows-arguments#change-the-number-of-default-containers">this documentation</a> about setting the partition count.
+    /// See <a href="https://learn.microsoft.com/azure/cosmos-db/emulator-windows-arguments#change-the-number-of-default-containers">this documentation</a> about setting the partition count.
     /// </remarks>
     public static IResourceBuilder<AzureCosmosDBEmulatorResource> WithPartitionCount(this IResourceBuilder<AzureCosmosDBEmulatorResource> builder, int count)
     {
@@ -289,7 +288,7 @@ public static class AzureCosmosExtensions
     /// <remarks>
     /// The Data Explorer is only available with <see cref="RunAsPreviewEmulator"/>.
     /// </remarks>
-    [Experimental("ASPIRECOSMOSDB001", UrlFormat = "https://aka.ms/dotnet/aspire/diagnostics#{0}")]
+    [Experimental("ASPIRECOSMOSDB001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
     public static IResourceBuilder<AzureCosmosDBEmulatorResource> WithDataExplorer(this IResourceBuilder<AzureCosmosDBEmulatorResource> builder, int? port = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -309,7 +308,9 @@ public static class AzureCosmosExtensions
             .WithUrls(context =>
             {
                 var url = context.Urls.FirstOrDefault(u => u.Endpoint?.EndpointName == KnownUrls.DataExplorer.EndpointName);
+#pragma warning disable IDE0031 // Use null propagation (IDE0031)
                 if (url is not null)
+#pragma warning restore IDE0031
                 {
                     url.DisplayText = KnownUrls.DataExplorer.DisplayText;
                 }
@@ -321,6 +322,7 @@ public static class AzureCosmosExtensions
     /// </summary>
     /// <param name="builder">The Azure Cosmos DB resource builder.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> builder.</returns>
+    /// <remarks>
     /// <example>
     /// The following example creates an Azure Cosmos DB resource that uses access key authentication.
     /// <code lang="csharp">
@@ -335,6 +337,7 @@ public static class AzureCosmosExtensions
     /// builder.Build().Run();
     /// </code>
     /// </example>
+    /// </remarks>
     public static IResourceBuilder<AzureCosmosDBResource> WithAccessKeyAuthentication(this IResourceBuilder<AzureCosmosDBResource> builder)
     {
         ArgumentNullException.ThrowIfNull(builder);

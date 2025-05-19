@@ -64,9 +64,9 @@ dotnet new aspire-starter
 > [!TIP]
 > If you get an error saying `Unable to resolve the template, the following installed templates are conflicting`, append a `-9` to the above template names. For example, `dotnet new aspire-starter-9`.
 
-These will create a `.sln` file and at least two projects.
+These will create a `.slnx` file and at least two projects.
 
-Assuming the NuGet feed you added above is visible -- for example you added it globally or it's in a NuGet.config in this folder - you can now build that `.sln`
+Assuming the NuGet feed you added above is visible -- for example you added it globally or it's in a NuGet.config in this folder - you can now build that `.slnx`
 ```shell
 dotnet restore
 dotnet build
@@ -78,3 +78,9 @@ dotnet run --project "<directoryname>.AppHost"
 ```
 
 Alternatively, if you are using Visual Studio, you can instead create a new Blazor Web App project and check the `Enlist in Aspire orchestration` box while creating it. Then use <kbd>F5</kbd> to debug or <kbd>Ctrl+F5</kbd> to launch without debugging.
+
+## Install the daily CLI
+
+```sh
+dotnet tool install --global aspire.cli --prerelease --source https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet9/nuget/v3/index.json
+```
