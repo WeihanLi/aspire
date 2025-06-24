@@ -115,6 +115,7 @@ public sealed partial class ConsoleLogs : ComponentBase, IComponentWithTelemetry
     private readonly List<MenuButtonItem> _resourceMenuItems = new();
 
     // State
+    private bool _showHiddenResources;
     private bool _showTimestamp;
     private bool _isTimestampUtc;
     public ConsoleLogsViewModel PageViewModel { get; set; } = null!;
@@ -126,6 +127,7 @@ public sealed partial class ConsoleLogs : ComponentBase, IComponentWithTelemetry
 
     protected override async Task OnInitializedAsync()
     {
+        TelemetryContextProvider.Initialize(TelemetryContext);
         _resourceSubscriptionToken = _resourceSubscriptionCts.Token;
         _logEntries = new(Options.Value.Frontend.MaxConsoleLogCount);
         _noSelection = new() { Id = null, Name = ControlsStringsLoc[nameof(ControlsStrings.LabelNone)] };
@@ -147,6 +149,12 @@ public sealed partial class ConsoleLogs : ComponentBase, IComponentWithTelemetry
         {
             _showTimestamp = consoleSettings.ShowTimestamp;
             _isTimestampUtc = consoleSettings.IsTimestampUtc;
+        }
+
+        var showHiddenResources = await SessionStorage.GetAsync<bool>(BrowserStorageKeys.ResourcesShowHiddenResources);
+        if (showHiddenResources.Success)
+        {
+            _showHiddenResources = showHiddenResources.Value;
         }
 
         await ConsoleLogsManager.EnsureInitializedAsync();
@@ -171,8 +179,6 @@ public sealed partial class ConsoleLogs : ComponentBase, IComponentWithTelemetry
             Logger.LogWarning(ex, "Load timeout while waiting for resource {ResourceName}.", ResourceName);
             PageViewModel.Status = Loc[nameof(Dashboard.Resources.ConsoleLogs.ConsoleLogsLogsNotYetAvailable)];
         }
-
-        TelemetryContextProvider.Initialize(TelemetryContext);
 
         async Task TrackResourceSnapshotsAsync()
         {
@@ -328,6 +334,27 @@ public sealed partial class ConsoleLogs : ComponentBase, IComponentWithTelemetry
             IsDivider = true
         });
 
+        CommonMenuItems.AddToggleHiddenResourcesMenuItem(
+            _logsMenuItems,
+            ControlsStringsLoc,
+            _showHiddenResources,
+            _resourceByName.Values,
+            SessionStorage,
+            EventCallback.Factory.Create<bool>(this, async
+            value =>
+            {
+                _showHiddenResources = value;
+
+                if (!_showHiddenResources && PageViewModel.SelectedResource?.IsResourceHidden(showHiddenResources: false) is true)
+                {
+                    PageViewModel.SelectedResource = null;
+                    PageViewModel.SelectedOption = _noSelection;
+                    await this.AfterViewModelChangedAsync(_contentLayout, false);
+                }
+
+                UpdateMenuButtons();
+            }));
+
         _logsMenuItems.Add(new()
         {
             OnClick = () => ToggleTimestampAsync(showTimestamp: !_showTimestamp, isTimestampUtc: _isTimestampUtc),
@@ -352,7 +379,6 @@ public sealed partial class ConsoleLogs : ComponentBase, IComponentWithTelemetry
 
             ResourceMenuItems.AddMenuItems(
                 _resourceMenuItems,
-                openingMenuButtonId: null,
                 PageViewModel.SelectedResource,
                 NavigationManager,
                 TelemetryRepository,
@@ -360,12 +386,12 @@ public sealed partial class ConsoleLogs : ComponentBase, IComponentWithTelemetry
                 ControlsStringsLoc,
                 ResourcesLoc,
                 CommandsLoc,
-                buttonId =>
+                EventCallback.Factory.Create(this, () =>
                 {
                     NavigationManager.NavigateTo(DashboardUrls.ResourcesUrl(resource: PageViewModel.SelectedResource.Name));
                     return Task.CompletedTask;
-                },
-                ExecuteResourceCommandAsync,
+                }),
+                EventCallback.Factory.Create<CommandViewModel>(this, ExecuteResourceCommandAsync),
                 (resource, command) => DashboardCommandExecutor.IsExecuting(resource.Name, command.Name),
                 showConsoleLogsItem: false,
                 showUrls: true);
@@ -392,12 +418,13 @@ public sealed partial class ConsoleLogs : ComponentBase, IComponentWithTelemetry
     internal static ImmutableList<SelectViewModel<ResourceTypeDetails>> GetConsoleLogResourceSelectViewModels(
         ConcurrentDictionary<string, ResourceViewModel> resourcesByName,
         SelectViewModel<ResourceTypeDetails> noSelectionViewModel,
-        string resourceUnknownStateText)
+        string resourceUnknownStateText,
+        bool showHiddenResources)
     {
         var builder = ImmutableList.CreateBuilder<SelectViewModel<ResourceTypeDetails>>();
 
         foreach (var grouping in resourcesByName
-            .Where(r => !r.Value.IsResourceHidden())
+            .Where(r => !r.Value.IsResourceHidden(showHiddenResources))
             .OrderBy(c => c.Value, ResourceViewModelNameComparer.Instance)
             .GroupBy(r => r.Value.DisplayName, StringComparers.ResourceName))
         {
@@ -458,7 +485,7 @@ public sealed partial class ConsoleLogs : ComponentBase, IComponentWithTelemetry
         }
     }
 
-    private void UpdateResourcesList() => _resources = GetConsoleLogResourceSelectViewModels(_resourceByName, _noSelection, Loc[nameof(Dashboard.Resources.ConsoleLogs.ConsoleLogsUnknownState)]);
+    private void UpdateResourcesList() => _resources = GetConsoleLogResourceSelectViewModels(_resourceByName, _noSelection, Loc[nameof(Dashboard.Resources.ConsoleLogs.ConsoleLogsUnknownState)], _showHiddenResources);
 
     private void LoadLogs(ConsoleLogsSubscription newConsoleLogsSubscription)
     {
@@ -478,7 +505,10 @@ public sealed partial class ConsoleLogs : ComponentBase, IComponentWithTelemetry
             {
                 lock (_updateLogsLock)
                 {
-                    foreach (var priorPause in PauseManager.ConsoleLogPauseIntervals)
+                    var pauseIntervals = PauseManager.ConsoleLogPauseIntervals;
+                    Logger.LogDebug("Adding {PauseIntervalsCount} pause intervals on initial logs load.", pauseIntervals.Length);
+
+                    foreach (var priorPause in pauseIntervals)
                     {
                         _logEntries.InsertSorted(LogEntry.CreatePause(priorPause.Start, priorPause.End));
                     }
@@ -661,6 +691,8 @@ public sealed partial class ConsoleLogs : ComponentBase, IComponentWithTelemetry
 
     private void OnPausedChanged(bool isPaused)
     {
+        Logger.LogDebug("Console logs paused new value: {IsPausedNewValue}", isPaused);
+
         var timestamp = DateTime.UtcNow;
         PauseManager.SetConsoleLogsPaused(isPaused, timestamp);
 
@@ -670,12 +702,15 @@ public sealed partial class ConsoleLogs : ComponentBase, IComponentWithTelemetry
             {
                 if (isPaused)
                 {
+                    Logger.LogDebug("Inserting new pause log entry starting at {StartTimestamp}.", timestamp);
                     _logEntries.InsertSorted(LogEntry.CreatePause(timestamp));
                 }
                 else
                 {
                     var pause = _logEntries.GetEntries().Last().Pause;
                     Debug.Assert(pause is not null);
+
+                    Logger.LogDebug("Updating pause log entry starting at {StartTimestamp} with end of {EndTimestamp}.", pause.StartTime, timestamp);
                     pause.EndTime = timestamp;
                 }
             }
@@ -707,20 +742,33 @@ public sealed partial class ConsoleLogs : ComponentBase, IComponentWithTelemetry
 
     public Task UpdateViewModelFromQueryAsync(ConsoleLogsViewModel viewModel)
     {
-        if (_resources is not null && ResourceName is not null)
+        if (_resources is not null)
         {
-            viewModel.SelectedOption = GetSelectedOption();
-            viewModel.SelectedResource = viewModel.SelectedOption.Id?.InstanceId is null ? null : _resourceByName[viewModel.SelectedOption.Id.InstanceId];
-            viewModel.Status ??= Loc[nameof(Dashboard.Resources.ConsoleLogs.ConsoleLogsLogsNotYetAvailable)];
-        }
-        else
-        {
-            viewModel.SelectedOption = _noSelection;
-            viewModel.SelectedResource = null;
-            viewModel.Status = Loc[nameof(Dashboard.Resources.ConsoleLogs.ConsoleLogsNoResourceSelected)];
+            if (ResourceName is not null)
+            {
+                viewModel.SelectedOption = GetSelectedOption();
+                viewModel.SelectedResource = viewModel.SelectedOption.Id?.InstanceId is null ? null : _resourceByName[viewModel.SelectedOption.Id.InstanceId];
+                viewModel.Status ??= Loc[nameof(Dashboard.Resources.ConsoleLogs.ConsoleLogsLogsNotYetAvailable)];
+                return Task.CompletedTask;
+            }
+            else if (TryGetSingleResource() is { } r)
+            {
+                // If there is no app selected and there is only one application available, select it.
+                viewModel.SelectedResource = r;
+                return this.AfterViewModelChangedAsync(_contentLayout, waitToApplyMobileChange: false);
+            }
         }
 
+        viewModel.SelectedOption = _noSelection;
+        viewModel.SelectedResource = null;
+        viewModel.Status = Loc[nameof(Dashboard.Resources.ConsoleLogs.ConsoleLogsNoResourceSelected)];
         return Task.CompletedTask;
+
+        ResourceViewModel? TryGetSingleResource()
+        {
+            var actualResources = _resourceByName.Values.Where(r => !r.IsResourceHidden(showHiddenResources: _showHiddenResources)).ToList();
+            return actualResources.Count == 1 ? actualResources[0] : null;
+        }
     }
 
     public string GetUrlFromSerializableViewModel(ConsoleLogsPageState serializable)
@@ -743,6 +791,6 @@ public sealed partial class ConsoleLogs : ComponentBase, IComponentWithTelemetry
     {
         TelemetryContext.UpdateTelemetryProperties([
             new ComponentTelemetryProperty(TelemetryPropertyKeys.ConsoleLogsShowTimestamp, new AspireTelemetryProperty(_showTimestamp, AspireTelemetryPropertyType.UserSetting))
-        ]);
+        ], Logger);
     }
 }

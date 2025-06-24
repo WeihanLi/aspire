@@ -404,10 +404,11 @@ public class MySqlFunctionalTests(ITestOutputHelper testOutputHelper)
 
             var mySqlDbName = "db1";
 
-            var mysql = builder.AddMySql("mysql").WithEnvironment("MYSQL_DATABASE", mySqlDbName);
-            var db = mysql.AddDatabase(mySqlDbName);
+            var mysql = builder.AddMySql("mysql")
+                               .WithEnvironment("MYSQL_DATABASE", mySqlDbName)
+                               .WithInitFiles(initFilesPath);
 
-            mysql.WithInitFiles(initFilesPath);
+            var db = mysql.AddDatabase(mySqlDbName);
 
             using var app = builder.Build();
 
@@ -575,27 +576,30 @@ public class MySqlFunctionalTests(ITestOutputHelper testOutputHelper)
 
             var rns = app.Services.GetRequiredService<ResourceNotificationService>();
 
-            var resourceEvent = await rns.WaitForResourceHealthyAsync("resource", cts.Token);
-            var mySqlId = GetContainerId(resourceEvent);
+            var mySqlId = await GetContainerIdAsync(rns, "resource", cts.Token);
 
             var mySqlId2 = "";
 
             if (useMultipleInstances)
             {
-                resourceEvent = await rns.WaitForResourceHealthyAsync("resource2", cts.Token);
-                mySqlId2 = GetContainerId(resourceEvent);
+                mySqlId2 = await GetContainerIdAsync(rns, "resource2", cts.Token);
             }
 
-            resourceEvent = await rns.WaitForResourceHealthyAsync("phpmyadmin", cts.Token);
-            var phpMyAdminId = GetContainerId(resourceEvent);
+            var phpMyAdminId = await GetContainerIdAsync(rns, "phpmyadmin", cts.Token);;
 
             await app.StopAsync(cts.Token).WaitAsync(cts.Token);
 
             return [mySqlId, mySqlId2, phpMyAdminId];
         }
 
-        static string? GetContainerId(ResourceEvent resourceEvent)
+        static async Task<string?> GetContainerIdAsync(ResourceNotificationService rns, string resourceName, CancellationToken cancellationToken)
         {
+            await rns.WaitForResourceHealthyAsync(resourceName, cancellationToken);
+            var resourceEvent = await rns.WaitForResourceAsync(resourceName, (evt) =>
+            {
+                return evt.Snapshot.Properties.FirstOrDefault(x => x.Name == "container.id")?.Value != null;
+            }, cancellationToken);
+
             return resourceEvent.Snapshot.Properties.FirstOrDefault(x => x.Name == "container.id")?.Value?.ToString();
         }
     }

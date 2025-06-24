@@ -18,13 +18,13 @@ internal sealed class TestAppHostBackchannel : IAppHostBackchannel
     public Func<CancellationToken, Task<(string, string?)>>? GetDashboardUrlsAsyncCallback { get; set; }
 
     public TaskCompletionSource? GetResourceStatesAsyncCalled { get; set; }
-    public Func<CancellationToken, IAsyncEnumerable<(string, string, string, string[])>>? GetResourceStatesAsyncCallback { get; set; }
+    public Func<CancellationToken, IAsyncEnumerable<RpcResourceState>>? GetResourceStatesAsyncCallback { get; set; }
 
     public TaskCompletionSource? ConnectAsyncCalled { get; set; }
     public Func<string, CancellationToken, Task>? ConnectAsyncCallback { get; set; }
 
     public TaskCompletionSource? GetPublishingActivitiesAsyncCalled { get; set; }
-    public Func<CancellationToken, IAsyncEnumerable<(string, string, bool, bool)>>? GetPublishingActivitiesAsyncCallback { get; set; }
+    public Func<CancellationToken, IAsyncEnumerable<PublishingActivity>>? GetPublishingActivitiesAsyncCallback { get; set; }
 
     public TaskCompletionSource? GetCapabilitiesAsyncCalled { get; set; }
     public Func<CancellationToken, Task<string[]>>? GetCapabilitiesAsyncCallback { get; set; }
@@ -58,7 +58,7 @@ internal sealed class TestAppHostBackchannel : IAppHostBackchannel
             : Task.FromResult<(string, string?)>(("http://localhost:5000/login?t=abcd", "https://monalisa-hot-potato-vrpqrxxrx7x2rxx-5000.app.github.dev/login?t=abcd"));
     }
 
-    public async IAsyncEnumerable<(string Resource, string Type, string State, string[] Endpoints)> GetResourceStatesAsync([EnumeratorCancellation]CancellationToken cancellationToken)
+    public async IAsyncEnumerable<RpcResourceState> GetResourceStatesAsync([EnumeratorCancellation]CancellationToken cancellationToken)
     {
         GetResourceStatesAsyncCalled?.SetResult();
 
@@ -75,8 +75,22 @@ internal sealed class TestAppHostBackchannel : IAppHostBackchannel
             using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
             while (await timer.WaitForNextTickAsync(cancellationToken))
             {
-                yield return ("frontend", "Project", "Starting", new[] { "http://localhost:5000" });
-                yield return ("backend", "Project", "Running", new[] { "http://localhost:5001" });
+                yield return new RpcResourceState
+                {
+                    Resource = "frontend",
+                    Type = "Project",
+                    State = "Starting",
+                    Endpoints = new[] { "http://localhost:5000" },
+                    Health = "Healthy"
+                };
+                yield return new RpcResourceState
+                {
+                    Resource = "backend",
+                    Type = "Project",
+                    State = "Running",
+                    Endpoints = new[] { "http://localhost:5001" },
+                    Health = "Healthy"
+                };
             }
         }
     }
@@ -90,10 +104,10 @@ internal sealed class TestAppHostBackchannel : IAppHostBackchannel
         }
     }
 
-    public async IAsyncEnumerable<(string Id, string StatusText, bool IsComplete, bool IsError)> GetPublishingActivitiesAsync([EnumeratorCancellation]CancellationToken cancellationToken)
+    public async IAsyncEnumerable<PublishingActivity> GetPublishingActivitiesAsync([EnumeratorCancellation]CancellationToken cancellationToken)
     {
         GetPublishingActivitiesAsyncCalled?.SetResult();
-        if (GetPublishingActivitiesAsyncCallback != null)
+        if (GetPublishingActivitiesAsyncCallback is not null)
         {
             var publishingActivities = GetPublishingActivitiesAsyncCallback.Invoke(cancellationToken).ConfigureAwait(false);
 
@@ -104,14 +118,110 @@ internal sealed class TestAppHostBackchannel : IAppHostBackchannel
         }
         else
         {
-            yield return ("root-activity", "Publishing artifacts", false, false);
-            yield return ("child-1", "Generating YAML goodness", false, false);
-            yield return ("child-1", "Generating YAML goodness", true, false);
-            yield return ("child-2", "Building image 1", false, false);
-            yield return ("child-2", "Building image 1", true, false);
-            yield return ("child-2", "Building image 2", false, false);
-            yield return ("child-2", "Building image 2", true, false);
-            yield return ("root-activity", "Publishing artifacts", true, false);
+            yield return new PublishingActivity
+            {
+                Type = PublishingActivityTypes.Step,
+                Data = new PublishingActivityData
+                {
+                    Id = "root-step",
+                    StatusText = "Publishing artifacts",
+                    IsComplete = false,
+                    IsError = false,
+                    IsWarning = false,
+                    StepId = null
+                }
+            };
+            yield return new PublishingActivity
+            {
+                Type = PublishingActivityTypes.Task,
+                Data = new PublishingActivityData
+                {
+                    Id = "child-task-1",
+                    StatusText = "Generating YAML goodness",
+                    IsComplete = false,
+                    IsError = false,
+                    IsWarning = false,
+                    StepId = "root-step"
+                }
+            };
+            yield return new PublishingActivity
+            {
+                Type = PublishingActivityTypes.Task,
+                Data = new PublishingActivityData
+                {
+                    Id = "child-task-1",
+                    StatusText = "Generating YAML goodness",
+                    IsComplete = true,
+                    IsError = false,
+                    IsWarning = false,
+                    StepId = "root-step"
+                }
+            };
+            yield return new PublishingActivity
+            {
+                Type = PublishingActivityTypes.Task,
+                Data = new PublishingActivityData
+                {
+                    Id = "child-task-2",
+                    StatusText = "Building image 1",
+                    IsComplete = false,
+                    IsError = false,
+                    IsWarning = false,
+                    StepId = "root-step"
+                }
+            };
+            yield return new PublishingActivity
+            {
+                Type = PublishingActivityTypes.Task,
+                Data = new PublishingActivityData
+                {
+                    Id = "child-task-2",
+                    StatusText = "Building image 1",
+                    IsComplete = true,
+                    IsError = false,
+                    IsWarning = false,
+                    StepId = "root-step"
+                }
+            };
+            yield return new PublishingActivity
+            {
+                Type = PublishingActivityTypes.Task,
+                Data = new PublishingActivityData
+                {
+                    Id = "child-task-2",
+                    StatusText = "Building image 2",
+                    IsComplete = false,
+                    IsError = false,
+                    IsWarning = false,
+                    StepId = "root-step"
+                }
+            };
+            yield return new PublishingActivity
+            {
+                Type = PublishingActivityTypes.Task,
+                Data = new PublishingActivityData
+                {
+                    Id = "child-task-2",
+                    StatusText = "Building image 2",
+                    IsComplete = true,
+                    IsError = false,
+                    IsWarning = false,
+                    StepId = "root-step"
+                }
+            };
+            yield return new PublishingActivity
+            {
+                Type = PublishingActivityTypes.Step,
+                Data = new PublishingActivityData
+                {
+                    Id = "root-step",
+                    StatusText = "Publishing artifacts",
+                    IsComplete = true,
+                    IsError = false,
+                    IsWarning = false,
+                    StepId = null
+                }
+            };
         }
     }
 
@@ -124,7 +234,7 @@ internal sealed class TestAppHostBackchannel : IAppHostBackchannel
         }
         else
         {
-            return ["baseline.v1"];
+            return ["baseline.v2"];
         }
     }
 }

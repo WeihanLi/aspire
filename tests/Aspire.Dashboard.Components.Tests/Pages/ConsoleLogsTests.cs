@@ -39,6 +39,56 @@ public partial class ConsoleLogsTests : DashboardTestContext
     }
 
     [Fact]
+    public async Task NoResourceName_SingleResource_RedirectToResource()
+    {
+        // Arrange
+        ILogger logger = null!;
+        var subscribedResourceNamesChannel = Channel.CreateUnbounded<string>();
+        var consoleLogsChannel = Channel.CreateUnbounded<IReadOnlyList<ResourceLogLine>>();
+        var resourceChannel = Channel.CreateUnbounded<IReadOnlyList<ResourceViewModelChange>>();
+        var testResource = ModelTestHelpers.CreateResource(appName: "test-resource", state: KnownResourceState.Running);
+        var dashboardClient = new TestDashboardClient(
+            isEnabled: true,
+            consoleLogsChannelProvider: name =>
+            {
+                logger.LogInformation($"Requesting logs for: {name}");
+                subscribedResourceNamesChannel.Writer.TryWrite(name);
+                return consoleLogsChannel;
+            },
+            resourceChannelProvider: () => resourceChannel,
+            initialResources: [testResource]);
+
+        SetupConsoleLogsServices(dashboardClient);
+
+        logger = Services.GetRequiredService<ILogger<ConsoleLogsTests>>();
+
+        var navigationManager = Services.GetRequiredService<NavigationManager>();
+
+        var targetLocationTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var changeHandler = navigationManager.RegisterLocationChangingHandler(c =>
+        {
+            targetLocationTcs.SetResult(c.TargetLocation);
+            return ValueTask.CompletedTask;
+        });
+
+        var dimensionManager = Services.GetRequiredService<DimensionManager>();
+        var viewport = new ViewportInformation(IsDesktop: true, IsUltraLowHeight: false, IsUltraLowWidth: false);
+        dimensionManager.InvokeOnViewportInformationChanged(viewport);
+
+        // Act 1
+        var cut = RenderComponent<Components.Pages.ConsoleLogs>(builder =>
+        {
+            builder.Add(p => p.ViewportInformation, viewport);
+        });
+
+        var instance = cut.Instance;
+        var loc = Services.GetRequiredService<IStringLocalizer<Resources.ConsoleLogs>>();
+
+        // Assert 1
+        Assert.Equal("/consolelogs/resource/test-resource", await targetLocationTcs.Task.DefaultTimeout());
+    }
+
+    [Fact]
     public async Task ResourceName_SubscribeOnLoadAndChange_SubscribeConsoleLogsOnce()
     {
         // Arrange
@@ -450,8 +500,9 @@ public partial class ConsoleLogsTests : DashboardTestContext
         cut.WaitForState(() => instance.PageViewModel.SelectedResource == testResource);
 
         logger.LogInformation("Pause logs.");
-        var pauseResumeButton = cut.FindComponent<PauseIncomingDataSwitch>();
-        pauseResumeButton.Find("fluent-button").Click();
+        var pauseResumeButton = cut.FindComponent<PauseIncomingDataSwitch>().WaitForElement("fluent-button");
+        pauseResumeButton.Click();
+        cut.WaitForAssertion(() => Assert.True(pauseManager.ConsoleLogsPaused));
 
         logger.LogInformation("Wait for pause log.");
         var pauseConsoleLogLine = cut.WaitForElement(".log-pause");
@@ -477,8 +528,8 @@ public partial class ConsoleLogsTests : DashboardTestContext
         // - the pause line has been replaced with pause details
         // - the log viewer shows the new log
         // - the log viewer does not show the discarded log
-        pauseResumeButton.Find("fluent-button").Click();
-        cut.WaitForAssertion(() => Assert.False(Services.GetRequiredService<PauseManager>().ConsoleLogsPaused));
+        pauseResumeButton.Click();
+        cut.WaitForAssertion(() => Assert.False(pauseManager.ConsoleLogsPaused));
 
         logger.LogInformation("Write a new log.");
         var resumeContent = $"{DateTime.UtcNow:yyyy-MM-ddTHH:mm:ss.fffK} Log after resume";
@@ -559,6 +610,7 @@ public partial class ConsoleLogsTests : DashboardTestContext
         Services.AddSingleton<BrowserTimeProvider>(timeProvider ?? new TestTimeProvider());
         Services.AddSingleton<IMessageService, MessageService>();
         Services.AddSingleton<IToastService, ToastService>();
+        Services.AddSingleton<GlobalState>();
         Services.AddSingleton<IOptions<DashboardOptions>>(Options.Create(new DashboardOptions()));
         Services.AddSingleton<DimensionManager>();
         Services.AddSingleton<TelemetryRepository>();

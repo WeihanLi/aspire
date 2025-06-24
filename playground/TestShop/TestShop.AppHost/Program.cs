@@ -30,7 +30,7 @@ basketCache.WithRedisCommander(c =>
 var catalogDbApp = builder.AddProject<Projects.CatalogDb>("catalogdbapp")
                           .WithReference(catalogDb);
 
-if (builder.Environment.IsDevelopment())
+if (builder.Environment.IsDevelopment() && builder.ExecutionContext.IsRunMode)
 {
     var resetDbKey = Guid.NewGuid().ToString();
     catalogDbApp.WithEnvironment("DatabaseResetKey", resetDbKey)
@@ -75,7 +75,7 @@ var frontend = builder.AddProject<Projects.MyFrontend>("frontend")
        .WithHttpHealthCheck("/health");
 
 builder.AddProject<Projects.OrderProcessor>("orderprocessor", launchProfileName: "OrderProcessor")
-        .WithReference(messaging).WaitFor(messaging);
+       .WithReference(messaging).WaitFor(messaging);
 
 builder.AddYarp("apigateway")
        .WithConfigFile("yarp.json")
