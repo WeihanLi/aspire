@@ -121,7 +121,7 @@ public sealed class InteractionInput
     public bool Required { get; init; }
 
     /// <summary>
-    /// Gets or sets the options for the input. Only used by <see cref="InputType.Select"/> inputs.
+    /// Gets or sets the options for the input. Only used by <see cref="InputType.Choice"/> inputs.
     /// </summary>
     public IReadOnlyList<KeyValuePair<string, string>>? Options { get; init; }
 
@@ -151,17 +151,17 @@ public enum InputType
     /// </summary>
     Text,
     /// <summary>
-    /// A password input.
+    /// A secure text input.
     /// </summary>
-    Password,
+    SecretText,
     /// <summary>
-    /// A select input.
+    /// A choice input. Selects from a list of options.
     /// </summary>
-    Select,
+    Choice,
     /// <summary>
-    /// A checkbox input.
+    /// A boolean input.
     /// </summary>
-    Checkbox,
+    Boolean,
     /// <summary>
     /// A numeric input.
     /// </summary>
@@ -323,9 +323,34 @@ public class InteractionOptions
     public bool? ShowDismiss { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether to escape HTML in the message content. Defaults to <c>true</c>.
+    /// Gets or sets a value indicating whether Markdown in the message is rendered.
+    /// Setting this to <c>true</c> allows a message to contain Markdown elements such as links, text decoration and lists.
     /// </summary>
-    public bool? EscapeMessageHtml { get; set; } = true;
+    public bool? EnableMessageMarkdown { get; set; }
+}
+
+/// <summary>
+/// Represents the result of an interaction.
+/// </summary>
+[Experimental(InteractionService.DiagnosticId, UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
+public class InteractionResult<T>
+{
+    /// <summary>
+    /// The data returned from the interaction. Won't have a useful value if the interaction was canceled.
+    /// </summary>
+    public T? Data { get; }
+
+    /// <summary>
+    /// A flag indicating whether the interaction was canceled by the user.
+    /// </summary>
+    [MemberNotNullWhen(false, nameof(Data))]
+    public bool Canceled { get; }
+
+    internal InteractionResult(T? data, bool canceled)
+    {
+        Data = data;
+        Canceled = canceled;
+    }
 }
 
 #pragma warning restore ASPIREINTERACTION001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.

@@ -2,9 +2,11 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Dashboard;
 using Aspire.Hosting.Devcontainers.Codespaces;
+using Aspire.Hosting.Exec;
 using Aspire.Hosting.Publishing;
 using Aspire.Hosting.Utils;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,9 +22,34 @@ internal class AppHostRpcTarget(
     IServiceProvider serviceProvider,
     PublishingActivityProgressReporter activityReporter,
     IHostApplicationLifetime lifetime,
-    DistributedApplicationOptions options
-    )
+    DistributedApplicationOptions options)
 {
+    private readonly TaskCompletionSource<Channel<BackchannelLogEntry>> _logChannelTcs = new();
+
+    public void RegisterLogChannel(Channel<BackchannelLogEntry> channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        _logChannelTcs.TrySetResult(channel);
+    }
+
+    public async IAsyncEnumerable<BackchannelLogEntry> GetAppHostLogEntriesAsync([EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var channel = await _logChannelTcs.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        var logEntries = channel.Reader.ReadAllAsync(cancellationToken);
+
+        await foreach (var logEntry in logEntries.WithCancellation(cancellationToken))
+        {
+            // If the log entry is null, terminate the stream
+            if (logEntry == null)
+            {
+                yield break;
+            }
+
+            yield return logEntry;
+        }
+    }
+
     public async IAsyncEnumerable<PublishingActivity> GetPublishingActivitiesAsync([EnumeratorCancellation] CancellationToken cancellationToken)
     {
         while (cancellationToken.IsCancellationRequested == false)
@@ -146,6 +173,16 @@ internal class AppHostRpcTarget(
         }
     }
 
+    public async IAsyncEnumerable<CommandOutput> ExecAsync([EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var execResourceManager = serviceProvider.GetRequiredService<ExecResourceManager>();
+        var logsStream = execResourceManager.StreamExecResourceLogs(cancellationToken);
+        await foreach (var commandOutput in logsStream.ConfigureAwait(false))
+        {
+            yield return commandOutput;
+        }
+    }
+
 #pragma warning disable CA1822
     public Task<string[]> GetCapabilitiesAsync(CancellationToken cancellationToken)
     {
@@ -172,4 +209,9 @@ internal class AppHostRpcTarget(
             });
     }
 #pragma warning restore CA1822
+
+    public async Task CompletePromptResponseAsync(string promptId, string?[] answers, CancellationToken cancellationToken = default)
+    {
+        await activityReporter.CompleteInteractionAsync(promptId, answers, cancellationToken).ConfigureAwait(false);
+    }
 }

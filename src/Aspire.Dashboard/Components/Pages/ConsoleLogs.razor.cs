@@ -553,6 +553,17 @@ public sealed partial class ConsoleLogs : ComponentBase, IComponentWithTelemetry
                     await InvokeAsync(StateHasChanged);
                 }
             }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // If the subscription is being canceled then error could be transient from cancellation. Ignore errors during cancellation.
+                if (!newConsoleLogsSubscription.CancellationToken.IsCancellationRequested)
+                {
+                    Logger.LogError(ex, "Error watching logs for resource {ResourceName}.", newConsoleLogsSubscription.Name);
+
+                    PageViewModel.Status = Loc[nameof(Dashboard.Resources.ConsoleLogs.ConsoleLogsErrorWatchingLogs)];
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
             finally
             {
                 Logger.LogDebug("Subscription {SubscriptionId} finished watching logs for resource {ResourceName}.", newConsoleLogsSubscription.SubscriptionId, newConsoleLogsSubscription.Name);
@@ -785,7 +796,7 @@ public sealed partial class ConsoleLogs : ComponentBase, IComponentWithTelemetry
     }
 
     // IComponentWithTelemetry impl
-    public ComponentTelemetryContext TelemetryContext { get; } = new(DashboardUrls.ConsoleLogBasePath);
+    public ComponentTelemetryContext TelemetryContext { get; } = new(ComponentType.Page, nameof(ConsoleLogs));
 
     public void UpdateTelemetryProperties()
     {
