@@ -6,7 +6,28 @@
 [![Good First Issue](https://img.shields.io/github/issues/dotnet/aspire/good%20first%20issue?style=flat&color=%24EC820&label=good%20first%20issue)](https://github.com/dotnet/aspire/labels/good%20first%20issue)
 [![Discord](https://img.shields.io/discord/1361488941836140614?style=flat&logo=discord&logoColor=white&label=Join%20our%20Discord&labelColor=512bd4&color=cyan)](https://discord.gg/raNPcaaSj8)
 
-## What is Aspire?
+
+Customized container image: https://hub.docker.com/r/weihanli/aspire-dashboard
+
+Github Action: https://github.com/WeihanLi/aspire/actions/workflows/container-image.yml
+
+[container image build workflow](./.github/workflows/container-image.yml)
+
+Usage example:
+
+Run container remove when stopped
+
+```sh
+docker run -d --rm --name aspire-dashboard -p 18888:18888 -p 4317:18889 weihanli/aspire-dashboard:latest
+```
+
+Run container restart always
+
+```sh
+docker run -d --restart=always --name aspire-dashboard -p 18888:18888 -p 4317:18889 weihanli/aspire-dashboard:latest
+```
+
+## What is .NET Aspire?
 
 Aspire provides tools, templates, and packages for building observable, production-ready distributed apps. At the center is the app model—a code-first, single source of truth that defines your app's services, resources, and connections.
 
