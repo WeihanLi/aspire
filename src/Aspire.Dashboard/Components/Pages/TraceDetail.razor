@@ -109,6 +109,7 @@
                                             RowClass="@GetRowClass"
                                             GridTemplateColumns="@_manager.GetGridTemplateColumns()"
                                             RowSize="DataGridRowSize.Small"
+                                            OverscanCount="100"
                                             ShowHover="true"
                                             ItemKey="@(r => r.Span.SpanId)"
                                             OnRowClick="@(r => r.ExecuteOnDefault(d => OnShowPropertiesAsync(d, buttonId: null)))">
@@ -152,7 +153,7 @@
                                                 <FluentIcon Class="span-kind-icon"
                                                             Color="Color.Custom"
                                                             CustomColor="@ColorGenerator.Instance.GetColorHexByKey(GetResourceName(context.Span.Source))"
-                                                            Value="@GetSpanIcon(context.Span)"/>
+                                                            Value="@TraceHelpers.TryGetSpanIcon(context.Span, IconVariant.Filled)"/>
                                             }
 
                                             @if (context.IsError)
@@ -297,11 +298,11 @@
                     <Details>
                         @if (context?.SpanViewModel is { } spanVm)
                         {
-                            <SpanDetails ViewModel="spanVm" />
+                            <SpanDetails ViewModel="spanVm" CloseCallback="() => ClearSelectedSpanAsync(causedByUserAction: true)" />
                         }
                         else if (context?.LogEntryViewModel is { } logEntryVm)
                         {
-                            <StructuredLogDetails ViewModel="logEntryVm" />
+                            <StructuredLogDetails ViewModel="logEntryVm" CloseCallback="() => ClearSelectedSpanAsync(causedByUserAction: true)" />
                         }
                     </Details>
                 </SummaryDetailsView>

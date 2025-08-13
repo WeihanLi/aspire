@@ -332,6 +332,11 @@
         <target state="translated">计数</target>
         <note>Count is the name of a plot y-axis label</note>
       </trans-unit>
+      <trans-unit id="PlotlyChartExemplar">
+        <source>Exemplar</source>
+        <target state="translated">示例</target>
+        <note />
+      </trans-unit>
       <trans-unit id="PlotlyChartExemplars">
         <source>Exemplars</source>
         <target state="translated">样本</target>
@@ -364,7 +369,7 @@
       </trans-unit>
       <trans-unit id="ResourceActions">
         <source>Resource actions</source>
-        <target state="new">Resource actions</target>
+        <target state="translated">资源操作</target>
         <note />
       </trans-unit>
       <trans-unit id="ResourceDetailsBackReferences">
@@ -571,11 +576,6 @@
         <source>Split vertical</source>
         <target state="translated">垂直拆分</target>
         <note />
-      </trans-unit>
-      <trans-unit id="TotalItemsFooterText">
-        <source>Total: &lt;strong&gt;{0} result(s) found&lt;/strong&gt;</source>
-        <target state="translated">总计: &lt;strong&gt;&lt;/strong&gt;找到 {0} 个结果</target>
-        <note>{0} is a number. This is raw markup, so &lt;strong&gt; and &lt;/strong&gt; should not be modified</note>
       </trans-unit>
       <trans-unit id="VolumeMountTypeColumnHeader">
         <source>Mount type</source>

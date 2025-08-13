@@ -89,8 +89,10 @@
                                     HeaderCellAsButtonWithMenu="true"
                                     ResizeType="DataGridResizeType.Discrete"
                                     Virtualize="true"
+                                    RowClass="@GetRowClass"
                                     GenerateHeader="GenerateHeaderOption.Sticky"
                                     ItemSize="46"
+                                    OverscanCount="100"
                                     ResizableColumns="true"
                                     ResizeColumnOnAllRows="false"
                                     ItemsProvider="@GetData"
@@ -183,10 +185,11 @@
             </div>
         </MainSection>
         <FooterSection>
-            <TotalItemsFooter
-                @ref="_totalItemsFooter"
-                TotalItemCount="@_totalItemsCount"
-                PauseText="@PauseText" />
+            <TotalItemsFooter @ref="_totalItemsFooter"
+                              TotalItemCount="@_totalItemsCount"
+                              SingularText="@Loc[nameof(Dashboard.Resources.Traces.TotalItemsFooterSingularText)]"
+                              PluralText="@Loc[nameof(Dashboard.Resources.Traces.TotalItemsFooterPluralText)]"
+                              PauseText="@PauseText"/>
         </FooterSection>
     </AspirePageContentLayout>
 </div>
