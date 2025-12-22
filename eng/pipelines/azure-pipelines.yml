@@ -94,6 +94,10 @@ extends:
       autoEnablePREfastWithNewRuleset: false
       autoEnableRoslynWithNewRuleset: false
     sdl:
+      componentgovernance:
+        # Exclude .packages folder from CG scanning. This folder contains older versions of our own
+        # packages restored for API compatibility validation, which may have since-fixed vulnerabilities.
+        ignoreDirectories: $(Build.SourcesDirectory)/.packages
       policheck:
         enabled: true
         exclusionsFile: $(Build.SourcesDirectory)\.config\PoliCheckExclusions.xml
@@ -206,7 +210,6 @@ extends:
             preSteps:
               - checkout: self
                 fetchDepth: 1
-                clean: true
 
             steps:
               - task: DownloadPipelineArtifact@2
@@ -234,7 +237,8 @@ extends:
                 inputs:
                   targetType: 'inline'
                   script: |
-                    npm install -g yarn
+                    $env:NPM_CONFIG_USERCONFIG="$(Build.SourcesDirectory)\.npmrc"
+                    npm install -g yarn@1.22.22
                     yarn --version
                   workingDirectory: '$(Build.SourcesDirectory)'
 
@@ -243,7 +247,8 @@ extends:
                 inputs:
                   targetType: 'inline'
                   script: |
-                    npm install -g @vscode/vsce
+                    $env:NPM_CONFIG_USERCONFIG="$(Build.SourcesDirectory)\.npmrc"
+                    npm install -g @vscode/vsce@3.7.1
                     vsce --version
                   workingDirectory: '$(Build.SourcesDirectory)'
 
@@ -257,11 +262,8 @@ extends:
                   repoTestResultsPath: $(Build.Arcade.TestResultsPath)
                   isWindows: true
                   targetRids:
-                    # aot
                     - win-x64
                     - win-arm64
-                    # non-aot - single file builds
-                    - win-x86
       - ${{ if and(notin(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranch'], 'refs/heads/main')) }}:
         - template: /eng/common/templates-official/job/onelocbuild.yml@self
           parameters:
